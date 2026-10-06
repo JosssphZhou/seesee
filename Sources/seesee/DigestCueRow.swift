@@ -1,70 +1,20 @@
 import AppKit
 import SwiftUI
 
-struct DigestNoteTextStack: View {
-    let text: String
-
-    var body: some View {
-        let lines = DigestCueDisplay.lines(from: text)
-        VStack(alignment: .leading, spacing: DigestCueDisplay.pairSpacing) {
-            Text(lines.translation)
-                .font(.system(size: DigestCueDisplay.translationSize))
-                .foregroundStyle(OpenMyChrome.ink)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-            if let original = lines.original {
-                Text(original)
-                    .font(.system(size: DigestCueDisplay.originalSize))
-                    .foregroundStyle(OpenMyChrome.muted)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-}
-
 struct DigestCueRow: View {
     let timeLabel: String
     let cueText: String
     let timeColumnWidth: CGFloat
     var isCurrent = false
     var query = ""
-    var isHighlighted = false
-    var showsActions = false
     var onSeek: () -> Void = {}
-    var onHighlight: () -> Void = {}
-    var highlightTitle = DigestBookChrome.highlightTitle
-    var stacksActions = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                timeButton
-                cueTextBlock
-                    .padding(.trailing, showsActions && !stacksActions ? DigestBookChrome.actionReserveWidth : 0)
-            }
-            .overlay(alignment: .leading) {
-                if isHighlighted {
-                    HighlightSentenceMark()
-                }
-            }
-            if showsActions && stacksActions {
-                DigestCueActionButtons(
-                    onHighlight: onHighlight,
-                    highlightTitle: highlightTitle
-                )
-                .padding(.leading, timeColumnWidth + 10)
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            timeButton
+            cueTextBlock
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .topTrailing) {
-            if showsActions && !stacksActions {
-                DigestCueActionButtons(
-                    onHighlight: onHighlight,
-                    highlightTitle: highlightTitle
-                )
-            }
-        }
     }
 
     private var timeButton: some View {
@@ -100,115 +50,6 @@ struct DigestCueRow: View {
                 )
             }
         )
-    }
-}
-
-private struct HighlightSentenceMark: View {
-    var body: some View {
-        GeometryReader { proxy in
-            let page = proxy.frame(in: .named("digest-book-page"))
-            let height = max(0, proxy.size.height - 4)
-            let rect = CGRect(
-                x: page.minX,
-                y: page.minY + 2,
-                width: DigestBookChrome.highlightMarkWidth,
-                height: height
-            )
-            RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(OpenMyChrome.ink)
-                .frame(width: DigestBookChrome.highlightMarkWidth, height: height)
-                .offset(y: 2)
-                .preference(
-                    key: DigestBookHitKey.self,
-                    value: ["highlight-mark": rect]
-                )
-        }
-        .frame(width: DigestBookChrome.highlightMarkWidth)
-    }
-}
-
-struct DigestCueActionButtons: View {
-    var onHighlight: () -> Void
-    var highlightTitle = DigestBookChrome.highlightTitle
-
-    var body: some View {
-        HStack(spacing: 4) {
-            actionButton(title: highlightTitle, action: onHighlight, hitKey: "highlight-action")
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    private func actionButton(title: String, action: @escaping () -> Void, hitKey: String) -> some View {
-        DigestAppKitActionButton(title: title, identifier: "digest.highlight", action: action)
-            .padding(.horizontal, 8)
-            .frame(minWidth: DigestBookChrome.minActionHit, minHeight: DigestBookChrome.minActionHit)
-            .help(title)
-            .background(
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: DigestBookHitKey.self,
-                        value: [hitKey: proxy.frame(in: .named("digest-book-page"))]
-                    )
-                }
-            )
-    }
-}
-
-private struct DigestAppKitActionButton: NSViewRepresentable {
-    var title: String
-    var identifier: String
-    var action: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(action: action)
-    }
-
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton(title: title, target: context.coordinator, action: #selector(Coordinator.click))
-        button.isBordered = false
-        button.bezelStyle = .inline
-        button.setButtonType(.momentaryPushIn)
-        button.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        button.contentTintColor = OpenMyChrome.nsInk
-        button.focusRingType = .none
-        button.setAccessibilityRole(.button)
-        button.setAccessibilityLabel(title)
-        button.setAccessibilityIdentifier(identifier)
-        button.setAccessibilityElement(true)
-        button.setAccessibilityHidden(false)
-        button.wantsLayer = true
-        button.layer?.backgroundColor = OpenMyChrome.nsRaise.cgColor
-        button.layer?.cornerRadius = OpenMyChrome.radiusSm
-        button.layer?.borderWidth = 1
-        button.layer?.borderColor = OpenMyChrome.nsHair.cgColor
-        button.setContentHuggingPriority(.required, for: .horizontal)
-        button.setContentHuggingPriority(.required, for: .vertical)
-        context.coordinator.button = button
-        return button
-    }
-
-    func updateNSView(_ button: NSButton, context: Context) {
-        context.coordinator.action = action
-        if button.title != title {
-            button.title = title
-            button.setAccessibilityLabel(title)
-        }
-        button.setAccessibilityIdentifier(identifier)
-        button.setAccessibilityHidden(false)
-        button.setAccessibilityElement(true)
-    }
-
-    final class Coordinator: NSObject {
-        var action: () -> Void
-        weak var button: NSButton?
-
-        init(action: @escaping () -> Void) {
-            self.action = action
-        }
-
-        @objc func click() {
-            action()
-        }
     }
 }
 
@@ -269,14 +110,11 @@ struct DigestCueText: NSViewRepresentable {
         }
     }
 
+    /// 只量不改：SwiftUI 会拿各种试探宽度来问尺寸，改了文本视图的排版宽度，
+    /// 最终放置时视图宽度没变就不会重新排版，句子就停在试探宽度上挤成窄列。
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: FittingTextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width > 0 else { return nil }
-        nsView.textContainerInset = .zero
-        nsView.textContainer?.lineFragmentPadding = 0
-        nsView.textContainer?.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
-        nsView.layoutManager?.usesFontLeading = false
-        nsView.layoutManager?.ensureLayout(for: nsView.textContainer!)
-        let height = DigestCueDisplay.blockHeight(for: text, width: width)
+        let height = DigestCueDisplay.blockHeight(for: text, width: width, isCurrent: isCurrent)
         return CGSize(width: width, height: height)
     }
 

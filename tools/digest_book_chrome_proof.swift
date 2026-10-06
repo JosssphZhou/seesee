@@ -61,13 +61,6 @@ struct DigestBookChromeProof {
         }
 
         let hits = sink.hits
-        guard let highlight = hits["highlight"] else {
-            fatalError("digest_book_chrome_proof: 缺少划线入口命中区 width=\(width)")
-        }
-        precondition(
-            highlight.height >= DigestBookChrome.minActionHit - 0.5,
-            "划线入口命中高度 \(highlight.height)pt < 22pt（width=\(width)）"
-        )
         guard let toc = hits["toc"] else {
             fatalError("digest_book_chrome_proof: 有章节时须显示目录行 width=\(width)")
         }
@@ -75,11 +68,7 @@ struct DigestBookChromeProof {
             toc.maxX <= width + 0.5 && toc.minX >= -0.5,
             "目录行超出栏宽 \(width)：\(toc)"
         )
-        precondition(
-            highlight.maxX <= width + 0.5 && highlight.minX >= -0.5,
-            "划线入口超出栏宽 \(width)：\(highlight)"
-        )
-        print("digest_book_chrome_proof width=\(Int(width)) highlight=\(Int(highlight.height))h/\(Int(highlight.width))w png=\(path)")
+        print("digest_book_chrome_proof width=\(Int(width)) toc=\(Int(toc.height))h/\(Int(toc.width))w png=\(path)")
         window.close()
     }
 
@@ -150,7 +139,6 @@ private struct DigestBookChromeProofView: View {
                 onQueryChange: { _ in },
                 matchCount: 0,
                 activeIndex: nil,
-                highlightCount: 0,
                 step: { _ in }
             )
             DigestTOCBanner(

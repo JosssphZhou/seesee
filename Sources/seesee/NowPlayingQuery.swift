@@ -103,8 +103,7 @@ enum NowPlayingQuery {
         let item = context.entry.item
         let position = max(0, context.clock.seconds)
         let duration = finitePositive(context.clock.durationSeconds) ?? finitePositive(item.duration)
-        return playbackFields(context).merging([
-            "title": item.title,
+        return playbackFields(context).merging(titleFields(item)) { _, new in new }.merging([
             "author": item.author,
             "sourceURL": webURL(item.urlString) ?? NSNull(),
             "videoID": YouTubeVideoID.extract(from: item.urlString) ?? NSNull(),
@@ -160,11 +159,23 @@ enum NowPlayingQuery {
         ]
     }
 
+    /// 标题各字段，不截断：`title` 是界面上显示的主标题（改名、中文译名、原标题依次取），
+    /// 其余字段原样给出，没有时为 null。`translatedTitleSource` 是 author（作者提供）或 onDevice（本机翻译）。
+    static func titleFields(_ item: WatchItem) -> [String: Any] {
+        [
+            "title": item.titleDisplay.primary,
+            "originalTitle": item.resolvedOriginalTitle,
+            "translatedTitle": item.translatedTitle ?? NSNull(),
+            "translatedTitleSource": item.translatedTitleSource ?? NSNull(),
+            "customTitle": item.customTitle ?? NSNull(),
+            "postText": item.postText ?? NSNull()
+        ]
+    }
+
     /// 画面附带的说明：对应的时间和标题。
     static func frameCaption(_ context: NowPlayingContext) -> [String: Any] {
         let position = max(0, context.clock.seconds)
-        return playbackFields(context).merging([
-            "title": context.entry.item.title,
+        return playbackFields(context).merging(titleFields(context.entry.item)) { _, new in new }.merging([
             "itemID": context.entry.item.id.uuidString,
             "positionSeconds": rounded(position, places: 2),
             "position": timecode(position)

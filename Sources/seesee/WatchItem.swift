@@ -28,6 +28,8 @@ struct VideoPlaybackSource: Equatable, Hashable {
 struct WatchItem: Identifiable, Codable, Hashable {
     let id: UUID
     var urlString: String
+    /// 主标题：按用户改名、中文译名、原标题取第一个，由 `refreshTitle()` 算出，不单独写。
+    /// 旧版 seesee 和只认 `title` 的工具读这一项。改标题走 `VideoTitle.swift` 里的几个方法。
     var title: String
     var author: String
     var duration: Double?
@@ -42,6 +44,16 @@ struct WatchItem: Identifiable, Codable, Hashable {
     var chapters: [VideoChapter]?
     var thumbnailFilePath: String?
     var subtitleFilePath: String?
+    /// 原标题，只由元数据写。旧条目没有这一项，读入时把旧的 `title` 当作原标题。
+    var originalTitle: String? = nil
+    /// 中文译名，只由翻译写。
+    var translatedTitle: String? = nil
+    /// 译名来源，取值见 `TitleTranslationSource`。存成字符串：遇到不认识的值也不会让整个队列读不出来。
+    var translatedTitleSource: String? = nil
+    /// 用户改的名字，只由重命名写。有它时元数据和翻译都不覆盖。
+    var customTitle: String? = nil
+    /// 推文全文，只有 X 视频有。
+    var postText: String? = nil
 
     var isWatched: Bool { watchedAt != nil }
 

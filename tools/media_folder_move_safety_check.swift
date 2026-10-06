@@ -403,6 +403,13 @@ struct MediaFolderMoveSafetyCheck {
                 )
             )
         }
+        // 按当前格式写（带原标题）。旧格式的 queue.json 一读进来就会补上原标题、按新格式存回，
+        // 那是标题迁移的事，由 tools/title_migration_check.swift 管；这里只看搬移前后字节一致。
+        items = items.map { item in
+            var current = item
+            current.originalTitle = item.title
+            return current
+        }
         let nested = env.source.appendingPathComponent("notes/readme.txt")
         try FileManager.default.createDirectory(at: nested.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("nested-note".utf8).write(to: nested)

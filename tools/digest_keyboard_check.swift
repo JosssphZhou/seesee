@@ -12,7 +12,7 @@ struct DigestKeyboardCheck {
         assertFocusMovesAmongVisibleCues()
         assertFocusStartsFromPlayingCue()
         assertFocusClampsAtEnds()
-        assertFocusAfterFilterAndVideoChange()
+        assertFocusAfterVideoChange()
         print("digest_keyboard_check=passed")
     }
 
@@ -23,10 +23,9 @@ struct DigestKeyboardCheck {
         precondition(route(keyCode: 76) == .jump, "小键盘回车必须同样跳播放")
         precondition(route(character: "e", keyCode: 14) == .passThrough, "解释已删除，e 不得再被字幕书占用")
         precondition(route(character: "E", keyCode: 14) == .passThrough, "解释已删除，大写 E 同样放行")
-        precondition(route(character: "h", keyCode: 4) == .highlight, "h 必须划线焦点句")
-        precondition(route(character: "H", keyCode: 4) == .highlight, "大写 H 必须同样划线")
-        precondition(route(character: "l", keyCode: 37) == .toggleHighlightsOnly, "l 必须切换只看划线")
-        precondition(route(character: "L", keyCode: 37) == .toggleHighlightsOnly, "大写 L 必须同样切换只看划线")
+        for character in ["h", "H", "l", "L"] {
+            precondition(route(character: character, keyCode: 0) == .passThrough, "\(character) 不得被字幕书占用")
+        }
         precondition(route(keyCode: 126) == .passThrough, "上方向键不得占用，必须留给调速")
         precondition(route(keyCode: 125) == .passThrough, "下方向键不得占用，必须留给调速")
     }
@@ -50,7 +49,7 @@ struct DigestKeyboardCheck {
         for keyCode: UInt16 in [126, 125, 36, 123, 124] {
             precondition(
                 route(isEditingText: true, keyCode: keyCode) == .passThrough,
-                "搜索框或批语输入中，方向键与回车不得拦截"
+                "搜索框输入中，方向键与回车不得拦截"
             )
         }
         for character in ["e", "h", "l", "a", "f", "[", "]"] {
@@ -158,7 +157,7 @@ struct DigestKeyboardCheck {
         )
         precondition(
             DigestKeyboardFocus.resolved(focused: nil, visible: visible, playing: 2) == 2,
-            "回车 / 解释 / 划线在尚无焦点时应落在当前播放句"
+            "回车在尚无焦点时应落在当前播放句"
         )
         precondition(
             DigestKeyboardFocus.resolved(focused: 3, visible: visible, playing: 0) == 3
@@ -178,14 +177,7 @@ struct DigestKeyboardCheck {
         precondition(DigestKeyboardFocus.moving(from: nil, visible: [], delta: 1, playing: 0) == nil)
     }
 
-    private static func assertFocusAfterFilterAndVideoChange() {
-        precondition(
-            DigestKeyboardFocus.afterFilterChange(focused: 4, visible: [1, 4, 9]) == 4
-        )
-        precondition(
-            DigestKeyboardFocus.afterFilterChange(focused: 3, visible: [1, 4, 9]) == 1,
-            "焦点句被滤掉时落到可见第一句"
-        )
+    private static func assertFocusAfterVideoChange() {
         precondition(DigestKeyboardFocus.afterVideoChange() == nil, "换视频必须丢掉上一本的句焦点")
         precondition(
             DigestKeyboardFocus.resolved(focused: 9, visible: [0, 1], playing: 0) == 0,

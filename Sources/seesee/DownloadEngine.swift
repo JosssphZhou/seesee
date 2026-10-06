@@ -6,6 +6,10 @@ final class DownloadEngine {
         let author: String
         let duration: Double?
         let chapters: [VideoChapter]
+        /// 视频说明。X 视频的推文全文在这里，标题会被 yt-dlp 截断。
+        var description: String? = nil
+        /// 视频的语言，例如 en。翻译标题时用来判断源语言，可能没有。
+        var language: String? = nil
     }
 
     struct Result {
@@ -40,6 +44,8 @@ final class DownloadEngine {
     private var processes: [UUID: Process] = [:]
     private var resolverProcesses: [UUID: Process] = [:]
     private let metadataQueue = DispatchQueue(label: "ai.openmy.seesee.metadata", qos: .utility)
+    /// 取作者中文标题单独排队，不和元数据、封面、字幕抢 metadataQueue。
+    private let titleQueue = DispatchQueue(label: "ai.openmy.seesee.localized-titles", qos: .utility)
     private let subtitleScanQueue = DispatchQueue(label: "ai.openmy.seesee.subtitle-scan", qos: .utility)
     private let playbackQueue = DispatchQueue(
         label: "ai.openmy.seesee.progressive-playback",
@@ -52,6 +58,9 @@ final class DownloadEngine {
     // composition. The combined stream starts directly while the download
     // format continues fetching the full-quality offline copy in parallel.
     private static let progressiveFormat = "b[height<=720][ext=mp4][vcodec!=none][acodec!=none][protocol^=http]/b[height<=720][vcodec!=none][acodec!=none]/best"
+
+    /// `WL_META` 和 `WL_DONE` 里元数据的各列，用 JSON 写，制表符和换行都被转义，不会打乱按制表符分列。
+    static let metadataFields = "%(title)j\t%(uploader)j\t%(duration)j\t%(chapters)j\t%(description)j\t%(language)j"
 
     func start(
         itemID: UUID,
@@ -111,8 +120,8 @@ final class DownloadEngine {
                     "--convert-subs", "srt",
                     "--ffmpeg-location", ffmpeg.deletingLastPathComponent().path,
                     "--progress-template", "download:WL_PROGRESS\t%(progress._percent_str)s\t%(progress._speed_str)s\t%(progress._eta_str)s",
-                    "--print", "before_dl:WL_META\t%(title)j\t%(uploader)j\t%(duration)j\t%(chapters)j",
-                    "--print", "after_move:WL_DONE\t%(filepath)j\t%(title)j\t%(uploader)j\t%(duration)j\t%(chapters)j"
+                    "--print", "before_dl:WL_META\t\(Self.metadataFields)",
+                    "--print", "after_move:WL_DONE\t%(filepath)j\t\(Self.metadataFields)"
                 ]
                 if let deno = self.findTool(named: "deno") {
                     arguments += ["--js-runtimes", "deno:\(deno.path)"]
@@ -270,7 +279,7 @@ final class DownloadEngine {
                     "--no-playlist",
                     "--skip-download",
                     "--no-color",
-                    "--print", "WL_META\t%(title)j\t%(uploader)j\t%(duration)j\t%(chapters)j"
+                    "--print", "WL_META\t\(Self.metadataFields)"
                 ]
                 if let deno = self.findTool(named: "deno") {
                     arguments += ["--js-runtimes", "deno:\(deno.path)"]
@@ -412,6 +421,64 @@ final class DownloadEngine {
         }
     }
 
+    /// 取 YouTube 视频作者提供的中文标题（本地化标题），返回「视频编号 → 标题」。
+    /// 单个视频页的 `lang` 参数已经失效（yt-dlp 问题 #13363），改把视频包成临时播放列表、用平铺模式读：
+    /// 列表接口按 `hl` 返回本地化标题。`watch_videos` 地址没有公开文档，失效时返回空，调用方退回本机翻译。
+    func fetchLocalizedTitles(
+        videoIDs: [String],
+        completion: @escaping ([String: String]) -> Void
+    ) {
+        titleQueue.async { [weak self] in
+            guard let self, !videoIDs.isEmpty, let ytDlp = self.findTool(named: "yt-dlp"),
+                  let url = URL(string: "https://www.youtube.com/watch_videos?video_ids=\(videoIDs.joined(separator: ","))")
+            else {
+                completion([:])
+                return
+            }
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = ytDlp
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            process.environment = self.processEnvironment()
+            var arguments = [
+                "--ignore-config",
+                "--flat-playlist",
+                "--skip-download",
+                "--no-color",
+                "--no-warnings",
+                "--extractor-args", "youtube:lang=zh-CN",
+                "--print", "WL_TITLE\t%(id)s\t%(title)j"
+            ]
+            if let deno = self.findTool(named: "deno") {
+                arguments += ["--js-runtimes", "deno:\(deno.path)"]
+            }
+            arguments.append(url.absoluteString)
+            process.arguments = arguments
+            do {
+                try process.run()
+            } catch {
+                completion([:])
+                return
+            }
+            // 网络卡住时不让它一直挂着：一分钟后停掉，当作没有中文标题。
+            let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 60, execute: watchdog)
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            watchdog.cancel()
+            var titles: [String: String] = [:]
+            for line in String(decoding: data, as: UTF8.self).components(separatedBy: .newlines)
+            where line.hasPrefix("WL_TITLE\t") {
+                let fields = line.components(separatedBy: "\t")
+                guard fields.count >= 3, videoIDs.contains(fields[1]),
+                      let title: String = self.decodeJSON(fields[2]), !title.isEmpty else { continue }
+                titles[fields[1]] = title
+            }
+            completion(titles)
+        }
+    }
+
     func fetchFlatPlaylist(
         sourceURL: URL,
         limit: Int,
@@ -499,7 +566,16 @@ final class DownloadEngine {
             let chapters = fields.count > offset + 3
                 ? ChapterMetadata.decode(json: fields[offset + 3]) ?? metadata.chapters
                 : metadata.chapters
-            metadata = Metadata(title: title, author: author, duration: duration, chapters: chapters)
+            let description: String? = fields.count > offset + 4 ? decodeJSON(fields[offset + 4]) : metadata.description
+            let language: String? = fields.count > offset + 5 ? decodeJSON(fields[offset + 5]) : metadata.language
+            metadata = Metadata(
+                title: title,
+                author: author,
+                duration: duration,
+                chapters: chapters,
+                description: description,
+                language: language
+            )
             onEvent(.metadata(metadata))
             return
         }

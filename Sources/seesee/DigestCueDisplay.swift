@@ -48,11 +48,12 @@ enum DigestCueDisplay {
         return fragment.minY + location.y
     }
 
-    static func blockHeight(for text: String, width: CGFloat) -> CGFloat {
+    /// 正在播的句子译文行加粗，字更宽、可能多折一行，所以按同样的字重量高度。
+    static func blockHeight(for text: String, width: CGFloat, isCurrent: Bool = false) -> CGFloat {
         let attributed = attributedString(
             text: text,
             query: "",
-            isCurrent: false,
+            isCurrent: isCurrent,
             originalColor: .white,
             translationColor: .white
         )

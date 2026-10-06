@@ -4,6 +4,7 @@ import Foundation
 import os.log
 
 private let progressivePlaybackLog = OSLog(subsystem: "ai.openmy.seesee", category: "progressive-playback")
+private let localizedTitleLog = OSLog(subsystem: "ai.openmy.seesee", category: "title-translation")
 
 private final class QueuePersistenceWriter {
     private let dataFile: URL
@@ -98,6 +99,14 @@ final class QueueStore: ObservableObject {
     private var waitingForNetwork: Set<UUID> = []
     private var waitingForPower: Set<UUID> = []
     private var powerCancellationIDs: Set<UUID> = []
+    /// 标题翻译：本次运行里已经收到原标题的条目、正在本机翻译的条目。
+    private var titleArrivedIDs: Set<UUID> = []
+    private var titleTranslationsInFlight: Set<UUID> = []
+    /// 作者中文标题：已经问过的条目、等着凑一批去问的条目（条目 → YouTube 视频编号）、问回来的结果。
+    private var localizedTitleRequestedIDs: Set<UUID> = []
+    private var localizedTitleBatch: [UUID: String] = [:]
+    private var localizedTitleBatchTask: Task<Void, Never>?
+    private var localizedTitleCandidates: [UUID: String] = [:]
     @Published private(set) var mediaFolder: URL
     @Published private(set) var isMediaFolderDisconnected = false
     @Published private(set) var mediaFolderMoveProgress: MediaLibraryMoveProgress?
@@ -107,6 +116,12 @@ final class QueueStore: ObservableObject {
     private var isMovingMediaFolder = false
     /// queue.json 在但读不出来或解码失败：无法判断，本次运行不写它，也不更改片库位置。
     private var isQueueFileUnreadable = false
+    /// 旧格式 queue.json 的升级前备份没写成时，留着原文件的字节。每次要保存前先重试备份，
+    /// 成功以前不保存、不搬移片库，用户的写操作在改内存之前就拒绝。
+    private var pendingUpgradeBackup: Data?
+    @Published private(set) var upgradeBackupFailed = false
+    static let backupFailureMessage = "无法备份数据，改动不会保存"
+    var queueWriteWarning: String? { upgradeBackupFailed ? Self.backupFailureMessage : nil }
     private let defaults: UserDefaults
     private let resolveMountedVolumes: () -> [URL]
     private let volumesRoot: URL
@@ -149,6 +164,7 @@ final class QueueStore: ObservableObject {
 
         wireMonitors()
         scheduleLaunchMediaFolderMoveIfNeeded()
+        backfillUnwatchedTitles()
     }
 
     /// 测试用最小注入初始化：直接指定数据文件与媒体目录，跳过监控接线，
@@ -286,6 +302,7 @@ final class QueueStore: ObservableObject {
             lastIntakeError = "这段文字里没有找到 HTTP 或 HTTPS 链接。"
             return
         }
+        guard acceptsUserWrite() else { return }
         guard urls.count > 1 else {
             consider(urls[0])
             return
@@ -376,6 +393,7 @@ final class QueueStore: ObservableObject {
     }
 
     private func consider(_ url: URL) {
+        guard acceptsUserWrite() else { return }
         if ChannelLink.isSubscription(url) {
             lastIntakeError = nil
             if channelWatch.contains(url) {
@@ -406,8 +424,8 @@ final class QueueStore: ObservableObject {
             if existing.state == .failed || existing.state == .queued { startDownload(for: existing.id) }
             if showsNotice {
                 let detail = existing.state == .failed || existing.state == .queued
-                    ? "正在重试 \(existing.title)"
-                    : "\(existing.title) 已经保存过了"
+                    ? "正在重试 \(existing.titleDisplay.primary)"
+                    : "\(existing.titleDisplay.primary) 已经保存过了"
                 showIntakeNotice(
                     title: "已在队列中",
                     detail: detail,
@@ -419,7 +437,7 @@ final class QueueStore: ObservableObject {
         }
 
         let host = url.host?.replacingOccurrences(of: "www.", with: "") ?? "视频"
-        let item = WatchItem(
+        var item = WatchItem(
             id: UUID(),
             urlString: canonical,
             title: host,
@@ -437,6 +455,8 @@ final class QueueStore: ObservableObject {
             thumbnailFilePath: nil,
             subtitleFilePath: nil
         )
+        // 元数据到之前先用网址的主机名占位。每个新条目都带原标题，下次启动就不会被当成旧格式再备份。
+        item.originalTitle = host
         items.insert(item, at: 0)
         if selectsItem { selection = item.id }
         lastIntakeError = nil
@@ -514,6 +534,7 @@ final class QueueStore: ObservableObject {
         save()
         os_log("download begins item=%{public}@ retry=%{public}@", log: progressivePlaybackLog, type: .default,
                id.uuidString, isRetry ? "yes" : "no")
+        requestLocalizedTitle(for: id)
 
         downloader.start(
             itemID: id,
@@ -529,6 +550,7 @@ final class QueueStore: ObservableObject {
     }
 
     func toggleWatched(_ id: UUID) {
+        guard acceptsUserWrite() else { return }
         update(id) {
             $0.watchedAt = $0.isWatched ? nil : Date()
             if $0.isWatched { $0.playbackPosition = nil }
@@ -537,6 +559,7 @@ final class QueueStore: ObservableObject {
     }
 
     func markWatched(_ id: UUID) {
+        guard ensureUpgradeBackup() else { return }
         update(id) {
             if $0.watchedAt == nil { $0.watchedAt = Date() }
             $0.playbackPosition = nil
@@ -545,21 +568,23 @@ final class QueueStore: ObservableObject {
     }
 
     func updatePlaybackPosition(_ seconds: Double, for id: UUID) {
-        guard seconds.isFinite, seconds >= 0, let existing = item(with: id) else { return }
+        // 备份没成功时续播进度不写，也不提示。
+        guard seconds.isFinite, seconds >= 0, let existing = item(with: id), ensureUpgradeBackup() else { return }
         let position = seconds < 3 ? nil : seconds
         if abs((existing.playbackPosition ?? 0) - (position ?? 0)) < 1 { return }
         update(id) { $0.playbackPosition = position }
         save()
     }
 
+    /// 用户改名只写 `customTitle`，元数据和翻译以后都不会覆盖它。
     func rename(_ id: UUID, to rawTitle: String) {
-        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, item(with: id)?.title != title else { return }
-        update(id) { $0.title = title }
+        guard var changed = item(with: id), changed.rename(to: rawTitle), acceptsUserWrite() else { return }
+        update(id) { $0 = changed }
         save()
     }
 
     func reorderQueueItem(_ draggedID: UUID, relativeTo targetID: UUID, insertAfter: Bool) {
+        guard acceptsUserWrite() else { return }
         var reorderedQueue = queueItems
         guard draggedID != targetID,
               let sourceIndex = reorderedQueue.firstIndex(where: { $0.id == draggedID }),
@@ -593,7 +618,7 @@ final class QueueStore: ObservableObject {
                 self.metadataRefreshes.remove(id)
                 guard case .success(let metadata) = result else { return }
                 self.update(id) {
-                    if !metadata.title.isEmpty { $0.title = metadata.title }
+                    $0.applyMetadataTitle(title: metadata.title, postText: metadata.description, author: metadata.author)
                     $0.author = metadata.author
                     $0.duration = metadata.duration
                     $0.chapters = metadata.chapters
@@ -679,6 +704,7 @@ final class QueueStore: ObservableObject {
     }
 
     func remove(_ id: UUID, deleteMedia: Bool = true) {
+        guard acceptsUserWrite() else { return }
         cancelRecovery(for: id)
         progressivePlaybackSources.removeValue(forKey: id)
         downloader.cancel(itemID: id)
@@ -692,7 +718,7 @@ final class QueueStore: ObservableObject {
         }
     }
 
-    /// 删除该视频的全部本地文件：同步前缀扫描删掉全部 <uuid>.* 文件，包括视频、字幕、缩略图、划线，
+    /// 删除该视频的全部本地文件：同步前缀扫描删掉全部 <uuid>.* 文件，包括视频、字幕、缩略图，
     /// 以及旧版本留下的问答、批注、目录记录。
     private func deleteLocalFiles(for id: UUID) {
         let folder = mediaFolder
@@ -733,6 +759,10 @@ final class QueueStore: ObservableObject {
     func moveMediaFolder(to destination: URL, mover: MediaLibraryMover? = nil) -> MediaLibraryMoveResult {
         guard !isMovingMediaFolder else {
             return .failure("正在搬移视频")
+        }
+        guard ensureUpgradeBackup() else {
+            mediaFolderMoveMessage = Self.backupFailureMessage
+            return .failure(Self.backupFailureMessage)
         }
         // 按磁盘上当前的 queue.json 判断，不信启动时读的结果：运行中被改坏时，
         // 先 flush 会拿内存里的旧队列把它覆盖掉，之后的搬移就看不出它坏过。
@@ -942,16 +972,139 @@ final class QueueStore: ObservableObject {
         defaults.set(QueueOrderPolicy.currentVersion, forKey: QueueOrderPolicy.versionDefaultsKey)
     }
 
+    // MARK: 标题翻译
+
+    /// 原标题到了：作者的中文标题已经问回来就用它；否则不是中文的原标题在本机翻一次。
+    /// 只对本次加进来、正在下载的条目调用，旧条目不批量补翻。
+    private func originalTitleArrived(for id: UUID, languageHint: String?) {
+        guard let item = item(with: id) else { return }
+        titleArrivedIDs.insert(id)
+        if applyLocalizedTitleCandidate(for: id) { return }
+        guard item.translatedTitle == nil, !titleTranslationsInFlight.contains(id) else { return }
+        let original = item.resolvedOriginalTitle
+        let text = QueueRowMeta.displayTitle(title: original, author: item.author)
+        guard TitleLanguage.needsTranslation(text) else { return }
+        let source = TitleLanguage.sourceLanguage(for: text, hint: languageHint)
+        titleTranslationsInFlight.insert(id)
+        Task { @MainActor [weak self] in
+            let translated = await OnDeviceTitleTranslator.shared.translate(text, from: source)
+            guard let self else { return }
+            self.titleTranslationsInFlight.remove(id)
+            // 翻译期间原标题换了、作者中文标题先到了，或者已经有译名，就不用这次的结果。
+            guard let translated, let current = self.item(with: id),
+                  current.resolvedOriginalTitle == original,
+                  current.translatedTitle == nil,
+                  !VideoTitleText.same(translated, text) else { return }
+            self.update(id) { $0.setTranslatedTitle(translated, source: .onDevice) }
+            self.save()
+        }
+    }
+
+    /// 启动时把还没看的旧条目补翻一次：只用本机翻译，不弹语言下载提示（没装语言包就跳过），
+    /// 不联网问作者标题；已看的不翻。新加入的条目由 `originalTitleArrived` 翻，这里只挑已经有原标题的。
+    /// 还没翻成的条目下次启动再试；翻过的、中文的不会再翻。
+    private func backfillUnwatchedTitles() {
+        let candidates = items.compactMap { item -> (UUID, String, String)? in
+            guard !item.isWatched, item.translatedTitle == nil,
+                  item.state == .ready || item.state == .failed,
+                  let original = VideoTitleText.nonEmpty(item.originalTitle),
+                  original != URL(string: item.urlString)?.host?.replacingOccurrences(of: "www.", with: "")
+            else { return nil }
+            let text = QueueRowMeta.displayTitle(title: original, author: item.author)
+            guard TitleLanguage.needsTranslation(text) else { return nil }
+            return (item.id, original, text)
+        }
+        guard !candidates.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            var translatedCount = 0
+            for (id, original, text) in candidates {
+                guard let self else { return }
+                guard !self.titleTranslationsInFlight.contains(id) else { continue }
+                self.titleTranslationsInFlight.insert(id)
+                let source = TitleLanguage.sourceLanguage(for: text, hint: nil)
+                let translated = await OnDeviceTitleTranslator.shared.translate(
+                    text,
+                    from: source,
+                    allowsDownloadPrompt: false
+                )
+                self.titleTranslationsInFlight.remove(id)
+                guard let translated, let current = self.item(with: id),
+                      !current.isWatched,
+                      current.resolvedOriginalTitle == original,
+                      current.translatedTitle == nil,
+                      !VideoTitleText.same(translated, text) else { continue }
+                self.update(id) { $0.setTranslatedTitle(translated, source: .onDevice) }
+                self.save()
+                translatedCount += 1
+            }
+            os_log("backfill titles candidates=%d translated=%d", log: localizedTitleLog, type: .default,
+                   candidates.count, translatedCount)
+        }
+    }
+
+    /// YouTube 视频开始下载时顺便问作者有没有中文标题。几条一起加进来时凑成一批，只启动一次 yt-dlp。
+    private func requestLocalizedTitle(for id: UUID) {
+        guard !localizedTitleRequestedIDs.contains(id),
+              let item = item(with: id), item.translationSource != .author,
+              let videoID = YouTubeVideoID.extract(from: item.urlString) else { return }
+        localizedTitleRequestedIDs.insert(id)
+        localizedTitleBatch[id] = videoID
+        guard localizedTitleBatchTask == nil else { return }
+        localizedTitleBatchTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            self?.sendLocalizedTitleBatch()
+        }
+    }
+
+    private func sendLocalizedTitleBatch() {
+        localizedTitleBatchTask = nil
+        let batch = localizedTitleBatch
+        localizedTitleBatch = [:]
+        guard !batch.isEmpty else { return }
+        let videoIDs = Array(Set(batch.values)).sorted()
+        downloader.fetchLocalizedTitles(videoIDs: videoIDs) { [weak self] titles in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                os_log("localized titles asked=%d got=%d", log: localizedTitleLog, type: .default,
+                       videoIDs.count, titles.count)
+                for (id, videoID) in batch {
+                    guard let title = titles[videoID] else { continue }
+                    self.localizedTitleCandidates[id] = title
+                    // 原标题还没到时先记着，到了再比。
+                    if self.titleArrivedIDs.contains(id) { self.applyLocalizedTitleCandidate(for: id) }
+                }
+            }
+        }
+    }
+
+    /// 作者的中文标题和原标题不同、原标题不是中文时，用它做译名，换掉本机翻译。返回用了没有。
+    @discardableResult
+    private func applyLocalizedTitleCandidate(for id: UUID) -> Bool {
+        guard let localized = localizedTitleCandidates[id], let item = item(with: id) else { return false }
+        let original = QueueRowMeta.displayTitle(title: item.resolvedOriginalTitle, author: item.author)
+        guard AuthorTitle.accepts(localized: localized, original: original) else {
+            localizedTitleCandidates[id] = nil
+            return false
+        }
+        localizedTitleCandidates[id] = nil
+        if item.translatedTitle != localized || item.translationSource != .author {
+            update(id) { $0.setTranslatedTitle(localized, source: .author) }
+            save()
+        }
+        return true
+    }
+
     private func handle(_ event: DownloadEngine.Event, for id: UUID) {
         switch event {
         case .metadata(let metadata):
             update(id) {
-                $0.title = metadata.title.isEmpty ? $0.title : metadata.title
+                $0.applyMetadataTitle(title: metadata.title, postText: metadata.description, author: metadata.author)
                 $0.author = metadata.author
                 $0.duration = metadata.duration
                 $0.chapters = metadata.chapters
             }
             save()
+            originalTitleArrived(for: id, languageHint: metadata.language)
         case .progress(let progress, let label):
             update(id) {
                 $0.progress = progress
@@ -992,7 +1145,11 @@ final class QueueStore: ObservableObject {
             os_log("download finished item=%{public}@ previewWasActive=%{public}@", log: progressivePlaybackLog,
                    type: .default, id.uuidString, hadPreview ? "yes" : "no")
             update(id) {
-                $0.title = downloaded.metadata.title.isEmpty ? $0.title : downloaded.metadata.title
+                $0.applyMetadataTitle(
+                    title: downloaded.metadata.title,
+                    postText: downloaded.metadata.description,
+                    author: downloaded.metadata.author
+                )
                 $0.author = downloaded.metadata.author
                 $0.duration = downloaded.metadata.duration
                 $0.chapters = downloaded.metadata.chapters
@@ -1005,6 +1162,7 @@ final class QueueStore: ObservableObject {
                 $0.errorMessage = nil
             }
             save()
+            originalTitleArrived(for: id, languageHint: downloaded.metadata.language)
         case .failure(let error):
             if powerCancellationIDs.remove(id) != nil {
                 if powerMonitor.isLowPowerModeEnabled {
@@ -1254,6 +1412,8 @@ final class QueueStore: ObservableObject {
     }
 
     private func load() {
+        pendingUpgradeBackup = nil
+        upgradeBackupFailed = false
         guard FileManager.default.fileExists(atPath: dataFile.path) else { return }
         guard let data = try? Data(contentsOf: dataFile),
               let decoded = MediaFolderMoveRecovery.decodeQueue(data) else {
@@ -1264,16 +1424,48 @@ final class QueueStore: ObservableObject {
             return
         }
         isQueueFileUnreadable = false
-        items = decoded
+        // 旧版本写的 queue.json：第一次按新格式保存前原样复制一份；旧的 title 当作原标题。
+        if TitleFieldsMigration.backUpIfLegacy(data, beside: dataFile) == .failed {
+            pendingUpgradeBackup = data
+            upgradeBackupFailed = true
+            persistenceWriter.cancelPending()
+        }
+        items = decoded.map { item in
+            var migrated = item
+            migrated.adoptLegacyTitle()
+            return migrated
+        }
     }
 
     private func save() {
-        guard !isQueueFileUnreadable else { return }
+        guard !isQueueFileUnreadable, ensureUpgradeBackup() else { return }
         persistenceWriter.schedule(items)
     }
 
     func flushPendingSaves() {
-        guard !isQueueFileUnreadable else { return }
+        guard !isQueueFileUnreadable, ensureUpgradeBackup() else { return }
         persistenceWriter.flush(items)
+    }
+
+    /// 升级前备份还没成功时再试一次。成功就解锁，这次运行积累的改动照常保存；失败返回 false。
+    private func ensureUpgradeBackup() -> Bool {
+        guard let data = pendingUpgradeBackup else { return true }
+        guard TitleFieldsMigration.backUpIfLegacy(data, beside: dataFile) != .failed else {
+            upgradeBackupFailed = true
+            return false
+        }
+        pendingUpgradeBackup = nil
+        upgradeBackupFailed = false
+        return true
+    }
+
+    /// 用户的写操作（加链接、改名、标记已看、排序、删除）在改内存之前先过这一关。
+    /// 备份还是写不成就拒绝，并提示改动不会保存。
+    private func acceptsUserWrite() -> Bool {
+        guard ensureUpgradeBackup() else {
+            showIntakeNotice(title: "没有保存", detail: Self.backupFailureMessage, systemImage: "exclamationmark.triangle.fill")
+            return false
+        }
+        return true
     }
 }

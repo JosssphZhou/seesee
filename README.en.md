@@ -98,6 +98,13 @@ Open seesee, play a video, and ask your agent "What am I watching?". If seesee i
 
 Only download media you are authorized to watch and keep. Site terms and copyright rules still apply.
 
+## Roadmap
+
+The features below are being redesigned.
+
+- **Highlights**: highlight the sentences you want to keep in the subtitle pane, then view only the highlighted sentences.
+- **Margin notes**: write a line of your own on a highlighted sentence, and see it when you look back.
+
 ## Build from source
 
 ```sh

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DigestSettingsView: View {
     @StateObject private var model: DigestSettingsModel
+    @AppStorage(AppearanceSetting.defaultsKey) private var appearance: AppearanceSetting = .system
 
     static let width: CGFloat = 460
 
@@ -11,6 +12,22 @@ struct DigestSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            row(AppearanceSetting.label) {
+                Picker(AppearanceSetting.label, selection: $appearance) {
+                    ForEach(AppearanceSetting.allCases) { setting in
+                        Text(setting.title).tag(setting)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                // 用系统默认的分段控件配色，不继承窗口的墨色 tint：墨色在运行中切外观后选中段会留在旧外观的颜色。
+                .tint(nil)
+                Spacer(minLength: 0)
+            }
+            .onChange(of: appearance) { setting in
+                OpenMyChrome.applyAppearance(setting)
+            }
             if model.mediaFolder != nil {
                 Text(DigestSettingsCopy.dataSectionTitle)
                     .font(.system(size: 15, weight: .semibold))

@@ -75,10 +75,7 @@ struct SidebarQueueSafeAreaHost<Content: View>: NSViewRepresentable {
     var content: Content
 
     func makeNSView(context: Context) -> SidebarQueueHostingView<Content> {
-        let view = SidebarQueueHostingView(rootView: content)
-        // 嵌套 NSHostingView 不继承外层 WindowGroup 的配色，须在这一层补回。
-        view.appearance = NSAppearance(named: .darkAqua)
-        return view
+        SidebarQueueHostingView(rootView: content)
     }
 
     func updateNSView(_ view: SidebarQueueHostingView<Content>, context: Context) {
@@ -111,7 +108,6 @@ struct SidebarQueueChrome<Header: View, Content: View>: View {
 
                 SidebarQueueSafeAreaHost(
                     content: content
-                        .preferredColorScheme(.dark)
                         .tint(OpenMyChrome.ink)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

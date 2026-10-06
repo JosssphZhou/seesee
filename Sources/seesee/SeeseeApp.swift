@@ -37,9 +37,10 @@ struct SeeseeApp: App {
             ContentView()
                 .environmentObject(store)
                 .environmentObject(appDelegate.inbox)
-                .preferredColorScheme(.dark)
                 .tint(OpenMyChrome.ink)
                 .background(MainWindowOpenBridge())
+                // 本机翻译标题要弹语言下载提示、或系统只能从视图拿翻译会话时，挂在主窗口上。
+                .modifier(TitleTranslationHost())
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     store.flushPendingSaves()
                 }
@@ -65,7 +66,6 @@ struct SeeseeApp: App {
         // 应用菜单「设置…」（⌘,）与标题栏齿轮：片库位置在这里查看和更改。
         Settings {
             DigestSettingsLiveView(store: store)
-                .preferredColorScheme(.dark)
                 .tint(OpenMyChrome.ink)
         }
         .windowResizability(.contentSize)

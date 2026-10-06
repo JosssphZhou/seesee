@@ -53,7 +53,7 @@ struct ContentView: View {
         .onPreferenceChange(URLBarFramePreferenceKey.self) { urlBarFrame = $0 }
         .background {
             ZStack {
-                WindowStyleConfigurator(title: store.selectedItem?.title ?? "seesee")
+                WindowStyleConfigurator(title: store.selectedItem?.titleDisplay.primary ?? "seesee")
                     .frame(width: 0, height: 0)
 
                 WindowWidthReader { width in
@@ -69,9 +69,13 @@ struct ContentView: View {
                     MediaFolderDisconnectedBanner(path: DigestSettingsCopy.displayPath(store.mediaFolder))
                         .padding(.top, 12)
                 }
+                if let warning = store.queueWriteWarning {
+                    QueueBackupFailedBanner(message: warning)
+                        .padding(.top, store.isMediaFolderDisconnected ? 0 : 12)
+                }
                 if let notice = store.intakeNotice {
                     IntakeToast(notice: notice, dismiss: store.dismissIntakeNotice)
-                        .padding(.top, store.isMediaFolderDisconnected ? 0 : 12)
+                        .padding(.top, store.isMediaFolderDisconnected || store.queueWriteWarning != nil ? 0 : 12)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
@@ -668,12 +672,23 @@ private struct QueueRow: View, Equatable {
                         .strokeBorder(OpenMyChrome.fieldBorder)
                 }
         } else {
-            Text(QueueRowMeta.displayTitle(title: item.title, author: item.author))
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(OpenMyChrome.ink)
-                .lineLimit(2)
-                .truncationMode(.tail)
-                .help("右键或双击已选中的条目可重命名")
+            let display = item.titleDisplay
+            VStack(alignment: .leading, spacing: 1) {
+                Text(display.primary)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(OpenMyChrome.ink)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                // 中文译名下面一行小字是原标题，同双语字幕一个思路。
+                if let secondary = display.secondary {
+                    Text(secondary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(OpenMyChrome.muted)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .help("右键或双击已选中的条目可重命名")
         }
     }
 
@@ -683,7 +698,7 @@ private struct QueueRow: View, Equatable {
 
     private func beginEditing() {
         guard !isEditingTitle else { return }
-        draftTitle = item.title
+        draftTitle = item.titleDisplay.primary
         isEditingTitle = true
         let controller = PlaybackWindowFocusController.attached(to: NSApp.keyWindow)
         controller?.setSwiftUITextFieldFocused(true)
@@ -795,6 +810,8 @@ private struct QueueThumbnail: View {
             }
         }
         .frame(width: 96, height: 54)
+        // 缩略图是画面，和播放区一样按深色取色：还没封面时的底和下载圆环在浅色外观下也看得清。
+        .environment(\.colorScheme, .dark)
         .clipShape(RoundedRectangle(cornerRadius: OpenMyChrome.radiusMd, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: OpenMyChrome.radiusMd, style: .continuous)
@@ -803,8 +820,9 @@ private struct QueueThumbnail: View {
         .overlay(alignment: .bottomLeading) {
             if let duration = item.duration, duration > 0, item.resumablePosition > 0 {
                 GeometryReader { geometry in
+                    // 进度线压在封面画面上，和画面一样固定白色，不随外观变。
                     Capsule()
-                        .fill(OpenMyChrome.ink)
+                        .fill(Color.white)
                         .frame(width: geometry.size.width * min(item.resumablePosition / duration, 1), height: 3)
                 }
                 .frame(height: 3)
@@ -1002,7 +1020,6 @@ private struct VideoDetail: View {
     @State private var skipHUDDuration: Double?
     @State private var skipHUDVisible = false
     @State private var skipHUDDismissalTask: Task<Void, Never>?
-    @StateObject private var digest = DigestSession()
     @State private var nowPlayingToken: UUID?
     let item: WatchItem
     let sidebarCollapsed: Bool
@@ -1016,7 +1033,6 @@ private struct VideoDetail: View {
         .navigationTitle("")
         .task(id: item.id) {
             subtitleMode = SubtitleModeStore.mode(for: item.id)
-            digest.ensureLoaded(itemID: item.id, folder: store.mediaFolder)
             store.rescanLocalSubtitle(for: item.id) { path in
                 loadSubtitles(path: path)
             }
@@ -1101,17 +1117,28 @@ private struct VideoDetail: View {
     private var centerPaneHeader: some View {
         HStack(spacing: PaneHeaderIconMetrics.spacing) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(QueueRowMeta.displayTitle(title: item.title, author: item.author))
+                Text(item.titleDisplay.primary)
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(OpenMyChrome.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
-                if !item.author.isEmpty {
-                    Text(item.author)
-                        .font(.system(size: 11))
-                        .foregroundStyle(OpenMyChrome.muted)
-                        .lineLimit(1)
+                // 第二行：原标题（有译名或改过名时）在前，作者在后；原标题太长时截断原标题，作者留着。
+                if item.titleDisplay.secondary != nil || !item.author.isEmpty {
+                    HStack(spacing: 6) {
+                        if let secondary = item.titleDisplay.secondary {
+                            Text(secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        if !item.author.isEmpty {
+                            Text(item.author)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(OpenMyChrome.muted)
                 }
             }
             .layoutPriority(1)
@@ -1246,8 +1273,6 @@ private struct VideoDetail: View {
             currentTime: playback.currentTime,
             isPlaying: playback.isPlaying,
             isPresented: chaptersPresented,
-            mediaFolder: store.mediaFolder,
-            digest: digest,
             toggle: toggleChapters,
             jumpAndPlay: jumpAndPlay
         )
@@ -1264,7 +1289,8 @@ private struct VideoDetail: View {
                     GeometryReader { geometry in
                         LocalVideoPlayer(
                             url: mediaURL,
-                            title: item.title,
+                            title: item.titleDisplay.primary,
+                            originalTitle: item.titleDisplay.secondary,
                             author: item.author,
                             resumeAt: item.resumablePosition,
                             seekRequest: seekRequest,
@@ -1303,6 +1329,8 @@ private struct VideoDetail: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .background(Color.black)
+        // 画面区域在浅色外观下也是黑底：画面上的提示框、等待画面和按钮一律按深色取色。
+        .environment(\.colorScheme, .dark)
         .clipShape(RoundedRectangle(cornerRadius: OpenMyChrome.radiusXl, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: OpenMyChrome.radiusXl, style: .continuous)
@@ -1590,6 +1618,30 @@ private struct VideoDetail: View {
     }
 }
 
+/// 旧格式 queue.json 的升级前备份写不成时一直显示，样式照片库未连接的横幅。
+private struct QueueBackupFailedBanner: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(OpenMyChrome.rec)
+            Text(message)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(OpenMyChrome.ink)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(OpenMyChrome.raise, in: RoundedRectangle(cornerRadius: OpenMyChrome.radiusSm, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: OpenMyChrome.radiusSm, style: .continuous)
+                .strokeBorder(OpenMyChrome.hair)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(message)
+    }
+}
+
 private struct MediaFolderDisconnectedBanner: View {
     let path: String
 
@@ -1622,6 +1674,11 @@ private struct MediaFolderDisconnectedBanner: View {
 
 private struct DetailBackdrop: View, Equatable {
     let thumbnailURL: URL?
+    @Environment(\.colorScheme) private var colorScheme
+
+    static func == (lhs: DetailBackdrop, rhs: DetailBackdrop) -> Bool {
+        lhs.thumbnailURL == rhs.thumbnailURL
+    }
 
     var body: some View {
         ZStack {
@@ -1633,7 +1690,8 @@ private struct DetailBackdrop: View, Equatable {
                     .aspectRatio(contentMode: .fill)
                     .blur(radius: 90)
                     .saturation(0.4)
-                    .opacity(0.06)
+                    // 浅色底上深色封面会把底压灰，和控制条的 raise 底色混在一起，浅色下减半。
+                    .opacity(colorScheme == .dark ? 0.06 : 0.03)
                     .scaleEffect(1.15)
             }
         }
@@ -2295,8 +2353,6 @@ private struct ChapterSidebar: View {
     let currentTime: Double
     let isPlaying: Bool
     let isPresented: Bool
-    let mediaFolder: URL
-    @ObservedObject var digest: DigestSession
     let toggle: () -> Void
     let jumpAndPlay: (Double) -> Void
 
@@ -2312,14 +2368,9 @@ private struct ChapterSidebar: View {
     @State private var searchQuery = ""
     @State private var searchActive = 0
     @State private var searchScrollToken = 0
-    @State private var hoveredCueIndex: Int?
     @State private var focusedCueIndex: Int?
     @State private var focusScrollToken = 0
-    @State private var highlightFilterAnchorIndex: Int?
-    @State private var highlightFilterScrollToken = 0
     @State private var tocExpanded = false
-    @State private var bookWidth: CGFloat = 300
-    @StateObject private var highlightScrollLock = DigestScrollLock()
 
     private let autoFollowResumeDelay: TimeInterval = 4
     /// 超过该间隔的时间跳变视为 seek，立刻恢复高亮跟随。
@@ -2330,16 +2381,7 @@ private struct ChapterSidebar: View {
     }
 
     private var visibleBookIndices: [Int] {
-        DigestHighlightFilter.visibleIndices(
-            cues: displayCues.map { DigestNoteSource(startTime: $0.startTime, text: $0.text) },
-            notes: digest.notes,
-            pending: digest.pendingDeletions,
-            highlightsOnly: digest.showsHighlightsOnly
-        )
-    }
-
-    private var collapsedHiddenCount: Int {
-        DigestHighlightFilter.hiddenCount(total: displayCues.count, visible: visibleBookIndices.count)
+        Array(displayCues.indices)
     }
 
     var body: some View {
@@ -2350,17 +2392,7 @@ private struct ChapterSidebar: View {
         }
         .background(OpenMyChrome.canvas)
         .coordinateSpace(name: "digest-book-page")
-        .background(
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: DigestBookWidthKey.self,
-                    value: proxy.size.width
-                )
-            }
-        )
-        .onPreferenceChange(DigestBookWidthKey.self) { bookWidth = $0 }
         .onAppear {
-            digest.ensureLoaded(itemID: itemID, folder: mediaFolder)
             displayCues = SubtitleSentenceBlocks.aggregate(subtitleCues)
             lastTrackedTime = currentTime
             refreshActiveCue(at: currentTime)
@@ -2396,14 +2428,11 @@ private struct ChapterSidebar: View {
                 tocExpanded = false
             }
         }
-        .onChange(of: itemID) { newID in
-            digest.ensureLoaded(itemID: newID, folder: mediaFolder)
+        .onChange(of: itemID) { _ in
             searchQuery = ""
             searchActive = 0
             focusedCueIndex = nil
-            hoveredCueIndex = nil
             tocExpanded = false
-            highlightFilterAnchorIndex = nil
         }
         .onChange(of: displayCues.count) { _ in
             refreshDigestKeyboardAvailability()
@@ -2411,19 +2440,12 @@ private struct ChapterSidebar: View {
         .onChange(of: isPresented) { _ in
             refreshDigestKeyboardAvailability()
         }
-        .onChange(of: digest.showsHighlightsOnly) { _ in
-            focusedCueIndex = DigestKeyboardFocus.afterFilterChange(
-                focused: focusedCueIndex,
-                visible: visibleBookIndices
-            )
-        }
     }
 
     /// 时级视频的时间码是 h:mm:ss，按内容预留列宽，避免切换时整列推移。
     private var timeColumnWidth: CGFloat {
         let needsHours = chapters.contains { $0.startTime >= 3600 }
             || subtitleCues.contains { $0.startTime >= 3600 }
-            || digest.notes.contains { $0.time >= 3600 }
         return needsHours ? 64 : 52
     }
 
@@ -2466,17 +2488,14 @@ private struct ChapterSidebar: View {
                         onQueryChange: { searchQuery = $0 },
                         matchCount: searchHits.count,
                         activeIndex: searchHits.isEmpty ? nil : searchActive,
-                        highlightCount: digest.highlightCount,
-                        isFilterActive: digest.showsHighlightsOnly,
-                        step: stepSearch,
-                        onHighlightFilter: toggleHighlightFilter
+                        step: stepSearch
                     )
                 }
                 ZStack(alignment: .bottom) {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: DigestCueDisplay.blockSpacing) {
-                                if !displayCues.isEmpty && !digest.showsHighlightsOnly && !tocChapters.isEmpty {
+                                if !displayCues.isEmpty && !tocChapters.isEmpty {
                                     DigestTOCBanner(
                                         chapters: tocChapters,
                                         duration: itemDuration ?? tocChapters.last?.endTime,
@@ -2490,18 +2509,12 @@ private struct ChapterSidebar: View {
                                 ForEach(visibleBookIndices, id: \.self) { index in
                                     bookCueRow(index: index)
                                 }
-                                if digest.showsHighlightsOnly, collapsedHiddenCount > 0 {
-                                    DigestCollapsedHint(hiddenCount: collapsedHiddenCount)
-                                }
                             }
                             .padding(.horizontal, 8)
                             .padding(.vertical, 8)
                             .background {
-                                ZStack {
-                                    SidePaneScrollActivityMonitor {
-                                        noteUserScroll()
-                                    }
-                                    DigestScrollLockMonitor(lock: highlightScrollLock)
+                                SidePaneScrollActivityMonitor {
+                                    noteUserScroll()
                                 }
                                 .frame(width: 0, height: 0)
                             }
@@ -2532,71 +2545,15 @@ private struct ChapterSidebar: View {
                             guard visibleBookIndices.contains(index) else { return }
                             scrollToCue(index, proxy: proxy)
                         }
-                        .onChange(of: highlightFilterScrollToken) { _ in
-                            let target = DigestHighlightFilter.scrollTarget(
-                                visibleIndices: visibleBookIndices,
-                                anchor: highlightFilterAnchorIndex ?? activeCueIndex
-                            )
-                            guard let target else { return }
-                            DispatchQueue.main.async {
-                                scrollToCue(target, proxy: proxy)
-                            }
-                        }
                         .onChange(of: focusScrollToken) { _ in
                             guard let focusedCueIndex,
                                   visibleBookIndices.contains(focusedCueIndex) else { return }
                             scrollToCue(focusedCueIndex, proxy: proxy)
                         }
                     }
-                    if let persistMessage = digest.persistMessage, !persistMessage.isEmpty {
-                        Text(persistMessage)
-                            .font(.system(size: 11))
-                            .foregroundStyle(OpenMyChrome.muted)
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 6)
-                    }
-                    if let pendingID = digest.latestPendingDeletionID {
-                        DigestNoteUndoBar {
-                            digest.undoDeleteNote(pendingID)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 12)
-                    }
-                    if let note = digest.editingNote {
-                        DigestCommentBar(
-                            timeLabel: formatTime(note.time),
-                            sentence: DigestCueDisplay.lines(from: note.text).translation,
-                            draft: digest.commentDraft,
-                            onDraftChange: { digest.commentDraft = $0 },
-                            onSave: { digest.updateComment(noteID: note.id, comment: $0) },
-                            onCancel: { digest.cancelEditComment() }
-                        )
-                    }
                 }
             }
         }
-    }
-
-    private func toggleHighlightFilter() {
-        commitCommentDraftIfNeeded()
-        if digest.showsHighlightsOnly {
-            let stored = highlightFilterAnchorIndex
-            digest.toggleHighlightFilter()
-            highlightFilterAnchorIndex = DigestHighlightFilter.exitTarget(
-                stored: stored,
-                visible: visibleBookIndices
-            )
-        } else {
-            let reading = focusedCueIndex
-                ?? hoveredCueIndex
-                ?? activeCueIndex
-            highlightFilterAnchorIndex = DigestHighlightFilter.enterAnchor(
-                reading: reading,
-                visible: visibleBookIndices
-            )
-            digest.toggleHighlightFilter()
-        }
-        highlightFilterScrollToken &+= 1
     }
 
     private func refreshDigestKeyboardAvailability() {
@@ -2621,11 +2578,6 @@ private struct ChapterSidebar: View {
         case .jump:
             guard let index = resolvedKeyboardCueIndex() else { return }
             jumpToCue(index: index)
-        case .highlight:
-            guard let index = resolvedKeyboardCueIndex() else { return }
-            toggleHighlight(for: displayCues[index])
-        case .toggleHighlightsOnly:
-            toggleHighlightFilter()
         }
     }
 
@@ -2662,42 +2614,15 @@ private struct ChapterSidebar: View {
         let isCurrent = activeCueIndex == index
         let isHit = searchHits.contains(index)
         let isActiveHit = searchHits.indices.contains(searchActive) && searchHits[searchActive] == index
-        VStack(alignment: .leading, spacing: 0) {
-            DigestCueRow(
-                timeLabel: formatTime(cue.startTime),
-                cueText: cue.text,
-                timeColumnWidth: timeColumnWidth,
-                isCurrent: isCurrent,
-                query: searchQuery,
-                isHighlighted: digest.isHighlighted(cue),
-                showsActions: hoveredCueIndex == index || focusedCueIndex == index,
-                onSeek: { jumpToCue(index: index) },
-                onHighlight: { toggleHighlight(for: cue) },
-                highlightTitle: digest.isHighlighted(cue)
-                    ? DigestBookChrome.unhighlightTitle
-                    : DigestBookChrome.highlightTitle,
-                stacksActions: bookWidth <= DigestBookChrome.minColumnWidth + 0.5
-            )
-            .help("跳到这句")
-            .background {
-                DigestHoverMonitor { hovering in
-                    if hovering {
-                        hoveredCueIndex = index
-                    } else if hoveredCueIndex == index {
-                        hoveredCueIndex = nil
-                    }
-                }
-            }
-
-            if let note = digest.note(for: cue), DigestNoteComment.shouldDisplay(note.comment) {
-                DigestHighlightCommentRow(
-                    text: note.comment ?? "",
-                    onBeginEdit: { beginEditComment(noteID: note.id) }
-                )
-                .padding(.top, DigestBookChrome.commentFieldSpacing)
-                .padding(.leading, timeColumnWidth + 10)
-            }
-        }
+        DigestCueRow(
+            timeLabel: formatTime(cue.startTime),
+            cueText: cue.text,
+            timeColumnWidth: timeColumnWidth,
+            isCurrent: isCurrent,
+            query: searchQuery,
+            onSeek: { jumpToCue(index: index) }
+        )
+        .help("跳到这句")
         .padding(.leading, 10)
         .padding(.trailing, 14)
         .padding(.vertical, DigestCueDisplay.rowVerticalPadding)
@@ -2719,35 +2644,8 @@ private struct ChapterSidebar: View {
         .id(index)
     }
 
-    private func commitCommentDraftIfNeeded() {
-        digest.commitCommentDraft()
-    }
-
-    private func beginEditComment(noteID: UUID) {
-        if digest.editingCommentNoteID != noteID {
-            commitCommentDraftIfNeeded()
-        }
-        digest.beginEditComment(noteID: noteID)
-    }
-
-    /// 点划线：立刻标线，底部输入条覆盖，不重排字幕流。
-    private func toggleHighlight(for cue: VideoSubtitleCue) {
-        highlightScrollLock.freeze()
-        let existing = digest.note(for: cue)
-        if existing?.id == digest.editingCommentNoteID {
-            digest.toggleHighlight(cue: cue)
-        } else {
-            commitCommentDraftIfNeeded()
-            digest.toggleHighlight(cue: cue)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            highlightScrollLock.unfreeze()
-        }
-    }
-
     /// 点歌词条目：先按目标索引刷新高亮/滚动，再交给播放器 seek。
     private func jumpToCue(index: Int) {
-        commitCommentDraftIfNeeded()
         guard displayCues.indices.contains(index) else { return }
         let cue = displayCues[index]
         activeCueIndex = index

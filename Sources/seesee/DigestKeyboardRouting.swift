@@ -4,12 +4,10 @@ enum DigestKeyboardAction: Equatable {
     case passThrough
     case moveFocus(Int)
     case jump
-    case highlight
-    case toggleHighlightsOnly
 }
 
 /// 字幕书快捷键。字幕书可用且焦点不在输入框时生效：
-/// [ / ] 移句、回车跳播放、h 划线、l 切换只看划线。
+/// [ / ] 移句、回车跳播放。
 /// 上下方向键始终调速度；空格、左右方向键、f 仍交给播放。
 enum DigestKeyboardRouting {
     private static let shortcutModifiers: NSEvent.ModifierFlags = [
@@ -39,15 +37,6 @@ enum DigestKeyboardRouting {
         case "]":
             return .moveFocus(1)
         default:
-            break
-        }
-
-        switch character?.lowercased() {
-        case "h":
-            return .highlight
-        case "l":
-            return .toggleHighlightsOnly
-        default:
             return .passThrough
         }
     }
@@ -76,11 +65,6 @@ enum DigestKeyboardFocus {
     static func resolved(focused: Int?, visible: [Int], playing: Int?) -> Int? {
         if let focused, visible.contains(focused) { return focused }
         if let playing, visible.contains(playing) { return playing }
-        return visible.first
-    }
-
-    static func afterFilterChange(focused: Int?, visible: [Int]) -> Int? {
-        if let focused, visible.contains(focused) { return focused }
         return visible.first
     }
 

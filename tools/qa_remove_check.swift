@@ -1,6 +1,6 @@
 import Foundation
 
-/// 删除接线回归：经**真实生产入口** `QueueStore.remove` 删视频，断言划线和旧版本留下的问答、批注、目录记录一并清掉。
+/// 删除接线回归：经**真实生产入口** `QueueStore.remove` 删视频，断言旧版本留下的问答、批注、目录记录一并清掉。
 /// 删掉 `remove` 里的 `deleteLocalFiles(for:)` 调用（或其中的清理）时本用例转红。
 @main
 struct QARemoveCheck {
@@ -19,12 +19,10 @@ struct QARemoveCheck {
         let qaURL = env.mediaFolder.appendingPathComponent("\(id.uuidString).qa.json")
         let annotationURL = env.mediaFolder.appendingPathComponent("\(id.uuidString).annotations.json")
         let digestURL = env.mediaFolder.appendingPathComponent("\(id.uuidString).digest.json")
-        let notesURL = env.mediaFolder.appendingPathComponent("\(id.uuidString).notes.json")
         let videoURL = env.mediaFolder.appendingPathComponent("\(id.uuidString).mp4")
         try Data("[]".utf8).write(to: qaURL)
         try Data("[]".utf8).write(to: annotationURL)
         try Data("{\"schemaVersion\":3}".utf8).write(to: digestURL)
-        try Data("[]".utf8).write(to: notesURL)
         try Data("video".utf8).write(to: videoURL)
         precondition(FileManager.default.fileExists(atPath: qaURL.path))
         precondition(FileManager.default.fileExists(atPath: annotationURL.path))
@@ -44,7 +42,6 @@ struct QARemoveCheck {
             "remove 必须删除 annotations.json（批注旁路文件）"
         )
         precondition(!FileManager.default.fileExists(atPath: digestURL.path), "remove 必须删除目录 sidecar")
-        precondition(!FileManager.default.fileExists(atPath: notesURL.path), "remove 必须删除划线 notes.json")
         precondition(!FileManager.default.fileExists(atPath: videoURL.path), "remove 必须删除视频文件")
     }
 

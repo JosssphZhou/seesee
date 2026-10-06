@@ -162,6 +162,28 @@ enum SubtitleOverlayChromeAnimation: Equatable {
     }
 }
 
+/// 一行字幕的文字类别，用来判断上下两行是不是两种语言。
+/// 含假名算日文、含谚文算韩文、只含汉字算中文，其余（拉丁字母等）归一类。
+enum SubtitleScript: Equatable {
+    case kana
+    case hangul
+    case han
+    case other
+
+    init(of text: String) {
+        var hasHan = false
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x3040...0x30FF: self = .kana; return
+            case 0xAC00...0xD7AF: self = .hangul; return
+            case 0x4E00...0x9FFF, 0x3400...0x4DBF: hasHan = true
+            default: break
+            }
+        }
+        self = hasHan ? .han : .other
+    }
+}
+
 struct VideoSubtitleTrack: Equatable, Sendable {
     let cues: [VideoSubtitleCue]
 
@@ -173,7 +195,7 @@ struct VideoSubtitleTrack: Equatable, Sendable {
         guard let source = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         let parsed = Self.parse(source)
         guard !parsed.isEmpty else { return nil }
-        cues = parsed
+        cues = Self.normalizeMonolingual(parsed)
     }
 
     func cue(at time: Double) -> VideoSubtitleCue? {
@@ -260,6 +282,42 @@ struct VideoSubtitleTrack: Equatable, Sendable {
         return isIndexLine(lines[cursor])
             && cursor + 1 < lines.count
             && lines[cursor + 1].contains("-->")
+    }
+
+    /// 多行 cue 里首行和末行文字不同的占到这个比例，整轨才算双语。
+    /// 双语合并轨实测在 0.99 以上，单语轨（含 YouTube 机翻中文）在 0.02 以下。
+    static let bilingualLineShareThreshold: Double = 0.5
+
+    /// 显示层把第二行起当译文。单语轨的多行 cue 只是一句话折了行，合成一行，
+    /// 浮层、右栏和 MCP 就都按整句显示；双语轨原样返回。
+    static func normalizeMonolingual(_ cues: [VideoSubtitleCue]) -> [VideoSubtitleCue] {
+        let multiLine = cues.map(captionLines).filter { $0.count >= 2 }
+        guard !multiLine.isEmpty else { return cues }
+        let paired = multiLine.filter { lines in
+            guard let first = lines.first, let last = lines.last else { return false }
+            return SubtitleScript(of: first) != SubtitleScript(of: last)
+        }
+        if Double(paired.count) / Double(multiLine.count) >= bilingualLineShareThreshold {
+            return cues
+        }
+        return cues.map { cue in
+            let lines = captionLines(cue)
+            guard lines.count >= 2 else { return cue }
+            return VideoSubtitleCue(
+                startTime: cue.startTime,
+                endTime: cue.endTime,
+                text: joinedCaptionLines(lines)
+            )
+        }
+    }
+
+    /// 英文折行补一个空格；两侧都是中日韩文字时直接相接。
+    private static func joinedCaptionLines(_ lines: [String]) -> String {
+        lines.dropFirst().reduce(lines[0]) { joined, line in
+            let tail = joined.last.map { SubtitleScript(of: String($0)) } ?? .other
+            let head = line.first.map { SubtitleScript(of: String($0)) } ?? .other
+            return tail != .other && head != .other ? joined + line : joined + " " + line
+        }
     }
 
     /// 相邻两条上一行与下一行正文完全相同，视为两行滚动窗在推进。

@@ -142,6 +142,9 @@ swiftc -module-cache-path "$scratch_dir/module-cache" \
     "$source_dir/MediaLibraryMover.swift" \
     "$source_dir/PlayerReadyDecision.swift" \
     "$source_dir/QueueStore.swift" \
+    "$source_dir/SponsorSkip.swift" \
+    "$source_dir/VideoTitle.swift" \
+    "$source_dir/TitleTranslation.swift" \
     "$project_dir/tools/progressive_retry_check.swift" \
     -o "$app_dir/Contents/MacOS/ProgressiveRetryCheck"
 

@@ -317,6 +317,9 @@ final class FloatingVideoPlayerView: AVPlayerView {
     var onReturnToMainWindow: (() -> Void)?
     private let volumeScrollInterpreter = PlayerVolumeScrollInterpreter()
     private let returnButton = NSButton()
+    private let titleBackdrop = NSView()
+    private let titleField = NSTextField(labelWithString: "")
+    private let originalTitleField = NSTextField(labelWithString: "")
     private let subtitleOverlay = PlayerSubtitleOverlayView()
     private var hoverTrackingArea: NSTrackingArea?
 
@@ -328,12 +331,14 @@ final class FloatingVideoPlayerView: AVPlayerView {
         super.init(frame: frameRect)
         subtitleOverlay.install(in: self)
         configureReturnButton()
+        configureTitle()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         subtitleOverlay.install(in: self)
         configureReturnButton()
+        configureTitle()
     }
 
     override func layout() {
@@ -410,8 +415,53 @@ final class FloatingVideoPlayerView: AVPlayerView {
         ])
     }
 
+    /// 悬停时左上角显示中文主标题，下面一行小字是原标题，和队列行一样。
+    func setTitle(_ title: String, originalTitle: String?) {
+        titleField.stringValue = title
+        originalTitleField.stringValue = originalTitle ?? ""
+        originalTitleField.isHidden = originalTitle == nil
+        titleBackdrop.setAccessibilityLabel([title, originalTitle].compactMap { $0 }.joined(separator: "\n"))
+    }
+
+    private func configureTitle() {
+        titleBackdrop.wantsLayer = true
+        titleBackdrop.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.58).cgColor
+        titleBackdrop.layer?.cornerRadius = 10
+        titleBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        titleBackdrop.isHidden = true
+        titleBackdrop.setAccessibilityElement(true)
+        titleBackdrop.setAccessibilityRole(.staticText)
+        titleField.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleField.textColor = .white
+        originalTitleField.font = .systemFont(ofSize: 11)
+        originalTitleField.textColor = NSColor.white.withAlphaComponent(0.7)
+        for field in [titleField, originalTitleField] {
+            field.lineBreakMode = .byTruncatingTail
+            field.maximumNumberOfLines = 1
+            field.cell?.truncatesLastVisibleLine = true
+            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
+        let stack = NSStackView(views: [titleField, originalTitleField])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 1
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        titleBackdrop.addSubview(stack)
+        addSubview(titleBackdrop, positioned: .below, relativeTo: returnButton)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: titleBackdrop.topAnchor, constant: 6),
+            stack.bottomAnchor.constraint(equalTo: titleBackdrop.bottomAnchor, constant: -6),
+            stack.leadingAnchor.constraint(equalTo: titleBackdrop.leadingAnchor, constant: 10),
+            stack.trailingAnchor.constraint(equalTo: titleBackdrop.trailingAnchor, constant: -10),
+            titleBackdrop.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            titleBackdrop.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            titleBackdrop.trailingAnchor.constraint(lessThanOrEqualTo: returnButton.leadingAnchor, constant: -8)
+        ])
+    }
+
     private func setHoverControlsVisible(_ visible: Bool) {
         returnButton.isHidden = !visible
+        titleBackdrop.isHidden = !visible || titleField.stringValue.isEmpty
         subtitleOverlay.setControlsVisible(visible)
         onHoverChanged?(visible)
     }
@@ -1126,6 +1176,8 @@ struct AirPlayRoutePicker: NSViewRepresentable {
 struct LocalVideoPlayer: NSViewRepresentable {
     let url: URL
     let title: String
+    /// 主标题下面那行原标题，只在小窗里显示。主标题就是原标题时为 nil。
+    let originalTitle: String?
     let author: String
     let resumeAt: Double
     let seekRequest: PlayerSeekRequest?
@@ -1163,6 +1215,7 @@ struct LocalVideoPlayer: NSViewRepresentable {
             action: #selector(Coordinator.handleVideoClick(_:))
         )
         view.addGestureRecognizer(click)
+        context.coordinator.updateFloatingTitle(title: title, originalTitle: originalTitle)
         context.coordinator.load(url: url, title: title, author: author, resumeAt: resumeAt, into: view)
         context.coordinator.updateSubtitles(track: subtitleTrack, mode: subtitleMode)
         context.coordinator.updateSponsorSkip(sourceURLString: sourceURLString, enabled: skipSponsorsEnabled)
@@ -1182,6 +1235,7 @@ struct LocalVideoPlayer: NSViewRepresentable {
 
     func updateNSView(_ view: PlayerLayerHostView, context: Context) {
         context.coordinator.onUnavailable = onUnavailable
+        context.coordinator.updateFloatingTitle(title: title, originalTitle: originalTitle)
         if context.coordinator.currentURL != url {
             if context.coordinator.canHandOff(to: url) {
                 // 同一条视频的片源变了（在线预览下完换成本地文件）：不重建播放器，原地换片段。
@@ -1211,6 +1265,8 @@ struct LocalVideoPlayer: NSViewRepresentable {
         private weak var playerView: PlayerLayerHostView?
         private var backgroundPanel: NSPanel?
         private var backgroundPlayerView: FloatingVideoPlayerView?
+        private var floatingTitle = ""
+        private var floatingOriginalTitle: String?
         private weak var fullscreenWindow: NSWindow?
         private weak var fullscreenContainerView: NSView?
         private var fullscreenPlayerView: PlayerLayerHostView?
@@ -1461,6 +1517,14 @@ struct LocalVideoPlayer: NSViewRepresentable {
                 guard item.status == .failed else { return }
                 DispatchQueue.main.async { self?.onUnavailable() }
             }
+        }
+
+        /// 小窗悬停时左上角显示的标题。
+        func updateFloatingTitle(title: String, originalTitle: String?) {
+            guard title != floatingTitle || originalTitle != floatingOriginalTitle else { return }
+            floatingTitle = title
+            floatingOriginalTitle = originalTitle
+            backgroundPlayerView?.setTitle(title, originalTitle: originalTitle)
         }
 
         func updateMetadata(title: String, author: String) {
@@ -1876,6 +1940,7 @@ struct LocalVideoPlayer: NSViewRepresentable {
             floatingView.layer?.cornerRadius = 16
             floatingView.layer?.masksToBounds = true
             floatingView.setAccessibilityLabel("悬浮播放器")
+            floatingView.setTitle(floatingTitle, originalTitle: floatingOriginalTitle)
 
             let panel = NSPanel(
                 contentRect: NSRect(origin: .zero, size: FloatingPlayerLayout.size),

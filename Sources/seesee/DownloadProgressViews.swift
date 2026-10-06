@@ -3,6 +3,7 @@ import SwiftUI
 /// 下载进度圆环：缩略图、右侧等待画面和播放器上的预览标记共用同一个圆环，只是大小不同。
 /// `fraction` 为 nil 时还没有百分比，转一段短弧；`pulsing` 时满格慢慢明暗（已到 100%，还在收尾）。
 /// 系统打开「减少动态效果」时不转也不明暗。
+/// 圆环用所在位置的前景色：画面和缩略图上是白色，控制条里跟着外观走。
 struct DownloadProgressRing: View {
     var fraction: Double?
     var diameter: CGFloat
@@ -14,12 +15,12 @@ struct DownloadProgressRing: View {
         ZStack {
             Circle()
                 .inset(by: lineWidth / 2)
-                .stroke(Color.white.opacity(0.22), lineWidth: lineWidth)
+                .stroke(.foreground.opacity(0.22), lineWidth: lineWidth)
             if let fraction {
                 Circle()
                     .inset(by: lineWidth / 2)
                     .trim(from: 0, to: min(max(fraction, 0), 1))
-                    .stroke(Color.white, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .stroke(.foreground, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                     .opacity(fraction > 0.002 ? 1 : 0)
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: fraction)
@@ -54,7 +55,7 @@ private struct DownloadRingSpinner: View {
         Circle()
             .inset(by: lineWidth / 2)
             .trim(from: 0, to: 0.28)
-            .stroke(Color.white, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            .stroke(.foreground, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
     }
 }
 
@@ -87,6 +88,7 @@ struct DownloadThumbnailOverlay: View {
                 lineWidth: 2.5,
                 pulsing: display.phase == .finishing
             )
+            .foregroundStyle(.white)
         }
     }
 }
@@ -105,6 +107,7 @@ struct DownloadWaitingStack: View {
                     lineWidth: 3,
                     pulsing: display.phase == .finishing
                 )
+                .foregroundStyle(.white)
                 if display.phase == .preparing {
                     Image(systemName: "arrow.down")
                         .font(.system(size: 18, weight: .medium))

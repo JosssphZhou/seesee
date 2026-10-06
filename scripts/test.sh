@@ -129,6 +129,23 @@ compile_and_run digest_cue_display \
     "$project_dir/Sources/seesee/DigestCueDisplay.swift" \
     "$project_dir/tools/digest_cue_display_check.swift"
 
+compile_and_run digest_current_row_height \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/DigestTranscriptSearch.swift" \
+    "$project_dir/Sources/seesee/DigestCueDisplay.swift" \
+    "$project_dir/tools/digest_current_row_height_check.swift"
+
+compile_and_run digest_row_width \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/DigestTranscriptSearch.swift" \
+    "$project_dir/Sources/seesee/DigestCueDisplay.swift" \
+    "$project_dir/Sources/seesee/OpenMyChrome.swift" \
+    "$project_dir/Sources/seesee/DigestBookChrome.swift" \
+    "$project_dir/Sources/seesee/DigestCueRow.swift" \
+    "$project_dir/tools/digest_row_width_check.swift"
+
 compile_and_run digest_typography_proof \
     "$project_dir/Sources/seesee/VideoSubtitles.swift" \
     "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
@@ -157,110 +174,6 @@ compile_and_run digest_jump \
     "$project_dir/Sources/seesee/DigestJumpPlayback.swift" \
     "$project_dir/tools/digest_jump_check.swift"
 
-compile_and_run digest_notes \
-    "$project_dir/Sources/seesee/DigestNotes.swift" \
-    "$project_dir/tools/digest_notes_check.swift"
-
-compile_and_run digest_note_undo \
-    "$project_dir/Sources/seesee/DigestNotes.swift" \
-    "$project_dir/Sources/seesee/DigestNoteUndo.swift" \
-    "$project_dir/tools/digest_note_undo_check.swift"
-
-compile_and_run digest_highlight \
-    "$project_dir/Sources/seesee/DigestNotes.swift" \
-    "$project_dir/Sources/seesee/DigestNoteUndo.swift" \
-    "$project_dir/tools/digest_highlight_check.swift"
-
-compile_and_run digest_highlight_filter \
-    "$project_dir/Sources/seesee/DigestNotes.swift" \
-    "$project_dir/Sources/seesee/DigestNoteUndo.swift" \
-    "$project_dir/Sources/seesee/DigestHighlightFilter.swift" \
-    "$project_dir/tools/digest_highlight_filter_check.swift"
-
-compile_and_run digest_highlight_notes_proof \
-    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
-    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
-    "$project_dir/Sources/seesee/DigestTranscriptSearch.swift" \
-    "$project_dir/Sources/seesee/DigestCueDisplay.swift" \
-    "$project_dir/Sources/seesee/OpenMyChrome.swift" \
-    "$project_dir/Sources/seesee/DigestBookChrome.swift" \
-    "$project_dir/Sources/seesee/DigestCueRow.swift" \
-    "$project_dir/Sources/seesee/DigestNotes.swift" \
-    "$project_dir/Sources/seesee/DigestNoteUndo.swift" \
-    "$project_dir/Sources/seesee/DigestHighlightFilter.swift" \
-    "$project_dir/Sources/seesee/DigestCopy.swift" \
-    "$project_dir/Sources/seesee/DigestSidebarViews.swift" \
-    "$project_dir/Sources/seesee/DigestHighlightViews.swift" \
-    "$project_dir/tools/digest_highlight_notes_proof.swift"
-
-compile_and_run digest_highlight_comment_proof \
-    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
-    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
-    "$project_dir/Sources/seesee/DigestTranscriptSearch.swift" \
-    "$project_dir/Sources/seesee/DigestCueDisplay.swift" \
-    "$project_dir/Sources/seesee/OpenMyChrome.swift" \
-    "$project_dir/Sources/seesee/DigestBookChrome.swift" \
-    "$project_dir/Sources/seesee/DigestCueRow.swift" \
-    "$project_dir/Sources/seesee/DigestNotes.swift" \
-    "$project_dir/Sources/seesee/DigestNoteUndo.swift" \
-    "$project_dir/Sources/seesee/DigestHighlightFilter.swift" \
-    "$project_dir/Sources/seesee/DigestCopy.swift" \
-    "$project_dir/Sources/seesee/DigestSidebarViews.swift" \
-    "$project_dir/Sources/seesee/DigestHighlightViews.swift" \
-    "$project_dir/tools/digest_highlight_comment_proof.swift"
-
-compile_and_run digest_highlight_jump_check \
-    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
-    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
-    "$project_dir/Sources/seesee/DigestTranscriptSearch.swift" \
-    "$project_dir/Sources/seesee/DigestCueDisplay.swift" \
-    "$project_dir/Sources/seesee/OpenMyChrome.swift" \
-    "$project_dir/Sources/seesee/DigestBookChrome.swift" \
-    "$project_dir/Sources/seesee/DigestCueRow.swift" \
-    "$project_dir/Sources/seesee/DigestNotes.swift" \
-    "$project_dir/Sources/seesee/DigestNoteUndo.swift" \
-    "$project_dir/Sources/seesee/DigestHighlightFilter.swift" \
-    "$project_dir/Sources/seesee/DigestCopy.swift" \
-    "$project_dir/Sources/seesee/DigestSidebarViews.swift" \
-    "$project_dir/Sources/seesee/DigestHighlightViews.swift" \
-    "$project_dir/tools/digest_highlight_jump_check.swift"
-
-compile_and_run digest_hover \
-    "$project_dir/Sources/seesee/DigestBookChrome.swift" \
-    "$project_dir/tools/digest_hover_check.swift"
-
-compile_and_run digest_hover_probe \
-    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
-    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
-    "$project_dir/Sources/seesee/DigestTranscriptSearch.swift" \
-    "$project_dir/Sources/seesee/DigestCueDisplay.swift" \
-    "$project_dir/Sources/seesee/OpenMyChrome.swift" \
-    "$project_dir/Sources/seesee/DigestBookChrome.swift" \
-    "$project_dir/Sources/seesee/DigestCueRow.swift" \
-    "$project_dir/tools/digest_hover_probe_check.swift"
-
-compile_and_run digest_hover_a11y \
-    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
-    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
-    "$project_dir/Sources/seesee/DigestTranscriptSearch.swift" \
-    "$project_dir/Sources/seesee/DigestCueDisplay.swift" \
-    "$project_dir/Sources/seesee/OpenMyChrome.swift" \
-    "$project_dir/Sources/seesee/DigestBookChrome.swift" \
-    "$project_dir/Sources/seesee/DigestCueRow.swift" \
-    "$project_dir/tools/digest_hover_a11y_check.swift"
-
-compile_and_run digest_session \
-    "$project_dir/Sources/seesee/WatchItem.swift" \
-    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
-    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
-    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
-    "$project_dir/Sources/seesee/DigestCopy.swift" \
-    "$project_dir/Sources/seesee/DigestNotes.swift" \
-    "$project_dir/Sources/seesee/DigestNoteUndo.swift" \
-    "$project_dir/Sources/seesee/DigestHighlightFilter.swift" \
-    "$project_dir/Sources/seesee/DigestSession.swift" \
-    "$project_dir/tools/digest_session_check.swift"
-
 compile_and_run digest_book_narrow_proof \
     "$project_dir/Sources/seesee/WatchItem.swift" \
     "$project_dir/Sources/seesee/ChapterMetadata.swift" \
@@ -275,10 +188,6 @@ compile_and_run digest_book_narrow_proof \
     "$project_dir/Sources/seesee/DigestCopy.swift" \
     "$project_dir/Sources/seesee/DigestTOC.swift" \
     "$project_dir/Sources/seesee/DigestTOCViews.swift" \
-    "$project_dir/Sources/seesee/DigestNotes.swift" \
-    "$project_dir/Sources/seesee/DigestNoteUndo.swift" \
-    "$project_dir/Sources/seesee/DigestHighlightFilter.swift" \
-    "$project_dir/Sources/seesee/DigestHighlightViews.swift" \
     "$project_dir/tools/digest_book_narrow_proof.swift"
 
 compile_and_run player_ready \
@@ -378,6 +287,9 @@ compile_and_run qa_remove \
     "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
     "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
     "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
     "$project_dir/tools/qa_remove_check.swift"
 
 compile_and_run media_folder_store \
@@ -403,6 +315,9 @@ compile_and_run media_folder_store \
     "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
     "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
     "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
     "$project_dir/tools/media_folder_store_check.swift"
 
 # 更改片库位置的数据安全：旧位置一个不删；复制中途、核对失败、改写队列中途退出后启动退回；queue.json 坏了不动文件。
@@ -429,7 +344,22 @@ compile_and_run media_folder_move_safety \
     "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
     "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
     "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
     "$project_dir/tools/media_folder_move_safety_check.swift"
+
+# 标题：显示优先级、改名不被覆盖、X 原标题、何时翻译、作者中文标题。
+compile_and_run title_display \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/tools/title_display_check.swift"
+
+# 标题分开存：旧 queue.json 迁移、下载中改的名不被覆盖（真实 QueueStore，假工具）。
+"$project_dir/scripts/test_title_fields.sh"
 
 # 正在看的位置：结果构造只取播放器时间；本机套接字鉴权与限制；MCP 桥接协议。
 compile_and_run now_playing_query \
@@ -439,8 +369,26 @@ compile_and_run now_playing_query \
     "$project_dir/Sources/seesee/SponsorSkip.swift" \
     "$project_dir/Sources/seesee/AppFolders.swift" \
     "$project_dir/Sources/seesee/AgentLink.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
     "$project_dir/Sources/seesee/NowPlayingQuery.swift" \
     "$project_dir/tools/now_playing_query_check.swift"
+
+# 单语字幕轨一条折成两行时，第二行不当译文；浮层、右栏和 MCP 三处一致，双语轨不变。
+compile_and_run mono_subtitle_track \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/DigestTranscriptSearch.swift" \
+    "$project_dir/Sources/seesee/DigestCueDisplay.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/AppFolders.swift" \
+    "$project_dir/Sources/seesee/AgentLink.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/NowPlayingQuery.swift" \
+    "$project_dir/tools/mono_subtitle_track_check.swift"
 
 compile_and_run agent_link \
     "$project_dir/Sources/seesee/AppFolders.swift" \
@@ -460,6 +408,8 @@ compile_and_run seesee_mcp_bridge \
     "$project_dir/Sources/seesee/SponsorSkip.swift" \
     "$project_dir/Sources/seesee/AppFolders.swift" \
     "$project_dir/Sources/seesee/AgentLink.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
     "$project_dir/Sources/seesee/NowPlayingQuery.swift" \
     "$project_dir/Sources/seesee/SeeseeMCPBridge.swift" \
     "$project_dir/tools/seesee_mcp_bridge_check.swift"
