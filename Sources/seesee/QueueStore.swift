@@ -813,6 +813,9 @@ final class QueueStore: ObservableObject {
                 if let newPath, !protected.contains(newPath),
                    let track = VideoSubtitleTrack(contentsOf: URL(fileURLWithPath: newPath)), self.ensureQueueWritable() {
                     self.update(id) {
+                        if track.cues.contains(where: { SubtitleVersionStore.split($0).translation != nil }) || $0.originalSubtitlePath == nil {
+                            $0.originalSubtitleSource = "download"
+                        }
                         $0.originalSubtitlePath = track.cues.contains { SubtitleVersionStore.split($0).translation != nil } ? newPath : ($0.originalSubtitlePath ?? $0.subtitleFilePath)
                         $0.initialSubtitlePath = newPath
                         $0.subtitleFilePath = newPath
@@ -1728,6 +1731,7 @@ final class QueueStore: ObservableObject {
                                 $0.transcriptionLanguageFallback = fallback
                             case .originalReady(let path):
                                 $0.originalSubtitlePath = path.path
+                                $0.originalSubtitleSource = "apple"
                                 $0.subtitleFilePath = path.path
                             case .translating: $0.transcriptionState = "translating"
                             }
@@ -1741,6 +1745,7 @@ final class QueueStore: ObservableObject {
                 guard self.item(with: id) != nil else { return }
                 self.update(id) {
                     $0.originalSubtitlePath = files.original.path
+                    $0.originalSubtitleSource = "apple"
                     $0.initialSubtitlePath = files.initial?.path
                     $0.subtitleFilePath = files.initial?.path ?? files.original.path
                     $0.translationSource = files.initial == nil ? nil : "apple"
@@ -1779,6 +1784,7 @@ final class QueueStore: ObservableObject {
         let manual = chinese.first { metadata?.subtitleLanguages.contains(language($0)) == true }
         let translated = manual ?? chinese.first
         var updated = item
+        updated.originalSubtitleSource = "download"
         if updated.knownSubtitlePaths == nil {
             updated.knownSubtitlePaths = try DownloadEngine.localSubtitleFiles(for: item.id, in: folder).map(\.path)
         }
@@ -1931,6 +1937,9 @@ final class QueueStore: ObservableObject {
         items = decoded.map { item in
             var migrated = item
             migrated.adoptLegacyTitle()
+            if migrated.originalSubtitleSource == nil, migrated.originalSubtitlePath != nil {
+                migrated.originalSubtitleSource = migrated.originalCorrectable ? "apple" : "download"
+            }
             return migrated
         }
         loadedTranscriptionItemIDs = Set(items.map(\.id))
@@ -2027,7 +2036,7 @@ final class QueueStore: ObservableObject {
 /// 标题和待播清单状态共用 queueFormatVersion；已有标题备份不代替本次格式升级备份。
 enum QueueUpgradeBackup {
     static let formatVersionKey = "queueFormatVersion"
-    static let currentFormatVersion = 7
+    static let currentFormatVersion = 8
     static let filePrefix = "queue-升级前备份-"
 
     /// 只在偏好设置里的格式版本低于当前版本、而且 queue.json 读得出来时备份；备份写成功才记下新版本。

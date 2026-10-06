@@ -177,6 +177,7 @@ enum QueueAgentQuery {
             "transcription": transcriptionObject(item),
             "translationSource": item.translationSource ?? NSNull(),
             "translationPolishable": item.translationPolishable,
+            "originalCorrectable": item.originalCorrectable,
             "hasSubtitles": item.subtitleFileURL != nil,
             "chapterCount": item.availableChapters.count,
             "chapterSource": item.chapterSource.rawValue
@@ -493,8 +494,13 @@ enum QueueAgentQuery {
         guard let revision = arguments["revision"] as? String, !revision.isEmpty else { throw Failure.invalid("缺少读取整轨时的 revision") }
         guard let values = arguments["translations"] as? [[String: Any]], !values.isEmpty else { throw Failure.invalid("translations 应是非空译文数组") }
         let translations = try values.map { value -> SubtitleVersionStore.Translation in
-            guard let rawIndex = value["index"], let text = value["translation"] as? String else { throw Failure.invalid("每项需要 index 和 translation") }
-            return .init(index: try index(rawIndex), translation: text)
+            guard let rawIndex = value["index"] else { throw Failure.invalid("每项需要 index") }
+            guard value["translation"] == nil || value["translation"] is String,
+                  value["original"] == nil || value["original"] is String,
+                  value["translation"] != nil || value["original"] != nil else {
+                throw Failure.invalid("每项需有 translation 或 original 的文字内容")
+            }
+            return .init(index: try index(rawIndex), translation: value["translation"] as? String, original: value["original"] as? String)
         }
         return (itemID, revision, translations)
     }

@@ -35,10 +35,13 @@ final class BoardPlayerPanelState: ObservableObject {
         return true
     }
 
+    /// 面板滑出、收起的时长。
+    static let slideDuration = 0.22
+
     static var animation: Animation? {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             ? nil
-            : .easeInOut(duration: 0.22)
+            : .easeInOut(duration: slideDuration)
     }
 }
 
@@ -502,11 +505,7 @@ struct BoardCardThumbnail: View {
     var body: some View {
         ZStack {
             if let image = ThumbnailImageCache.image(for: item.thumbnailFileURL) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
+                ThumbnailFill(image: image)
             } else {
                 ZStack {
                     LinearGradient(
@@ -756,6 +755,37 @@ private struct PanelResizeHandle: NSViewRepresentable {
         private var cursorArea: NSTrackingArea?
 
         override var mouseDownCanMoveWindow: Bool { false }
+
+        // 窗口按视图当时露在外面的部分算光标区域。面板刚放进窗口时还在窗口右边外面，算出来是空的；
+        // 滑入是 SwiftUI 的位移动画，这个视图自己的大小和位置不变，窗口不会再算。所以放进窗口时、
+        // 尺寸位置变了、重新布局时都让窗口重算，滑到位以后再算一次。
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            refreshCursorRects()
+            guard window != nil else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + BoardPlayerPanelState.slideDuration + 0.08) { [weak self] in
+                self?.refreshCursorRects()
+            }
+        }
+
+        override func setFrameOrigin(_ newOrigin: NSPoint) {
+            super.setFrameOrigin(newOrigin)
+            refreshCursorRects()
+        }
+
+        override func setFrameSize(_ newSize: NSSize) {
+            super.setFrameSize(newSize)
+            refreshCursorRects()
+        }
+
+        override func layout() {
+            super.layout()
+            refreshCursorRects()
+        }
+
+        private func refreshCursorRects() {
+            window?.invalidateCursorRects(for: self)
+        }
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 

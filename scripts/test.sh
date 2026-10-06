@@ -52,9 +52,17 @@ compile_and_run board_layout \
     "$project_dir/Sources/seesee/BoardColumns.swift" \
     "$project_dir/tools/board_layout_check.swift"
 
+compile_and_run thumbnail_fill \
+    "$project_dir/Sources/seesee/ThumbnailFill.swift" \
+    "$project_dir/tools/thumbnail_fill_check.swift"
+
 compile_and_run subtitle_parser \
     "$project_dir/Sources/seesee/VideoSubtitles.swift" \
     "$project_dir/tools/subtitle_parser_check.swift"
+
+compile_and_run subtitle_mode_default \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/tools/subtitle_mode_default_check.swift"
 
 compile_and_run subtitle_presentation \
     "$project_dir/Sources/seesee/VideoSubtitles.swift" \

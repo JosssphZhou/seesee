@@ -130,6 +130,8 @@ enum SubtitleModeStore {
         if let raw = dict[id.uuidString], let mode = SubtitleDisplayMode(rawValue: raw) {
             return mode
         }
+        // 没记过档位：老用户沿用旧的全局开关，明确关掉的也照旧关；新用户没有这个键，默认双语。
+        guard UserDefaults.standard.object(forKey: legacyKey) != nil else { return .bilingual }
         return UserDefaults.standard.bool(forKey: legacyKey) ? .bilingual : .off
     }
 

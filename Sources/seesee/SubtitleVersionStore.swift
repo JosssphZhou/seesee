@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// 不可变字幕版本：原文和编号取首次字幕，译文取活动版本，修订凭据也覆盖文件内容。
+/// 不可变字幕版本：编号和时间取首次字幕，文字取活动版本，修订凭据也覆盖文件内容。
 enum SubtitleVersionStore {
     struct Failure: Error, LocalizedError {
         let code: String
@@ -10,7 +10,11 @@ enum SubtitleVersionStore {
     }
     struct Translation: Sendable {
         let index: Int
-        let translation: String
+        let translation: String?
+        let original: String?
+        init(index: Int, translation: String? = nil, original: String? = nil) {
+            self.index = index; self.translation = translation; self.original = original
+        }
     }
     struct Snapshot {
         let revision: String
@@ -37,10 +41,10 @@ enum SubtitleVersionStore {
         }
         let cues = try zip(initialBlocks, currentBlocks).map { initial, current -> VideoSubtitleCue in
             guard initial.startTime == current.startTime, initial.endTime == current.endTime,
-                  (translationOnly || split(initial).original == split(current).original) else {
+                  (translationOnly || item.originalCorrectable || split(initial).original == split(current).original) else {
                 throw Failure(code: "subtitles_changed", message: "原文或时间戳已经改变，请重新读取字幕")
             }
-            let lines = translationOnly ? [current.text] : [split(initial).original, split(current).translation].compactMap { $0 }.filter { !$0.isEmpty }
+            let lines = translationOnly ? [current.text] : [item.originalCorrectable ? split(current).original : split(initial).original, split(current).translation].compactMap { $0 }.filter { !$0.isEmpty }
             return VideoSubtitleCue(startTime: initial.startTime, endTime: initial.endTime, text: lines.joined(separator: "\n"), isSentenceBlock: true)
         }
         var hash = SHA256()
@@ -54,30 +58,49 @@ enum SubtitleVersionStore {
     }
 
     static func writing(_ translations: [Translation], revision: String, item: WatchItem) throws -> WatchItem {
-        guard item.translationPolishable else { throw notPolishable() }
+        let correctsOriginal = translations.contains { $0.original != nil }
+        let polishesTranslation = translations.contains { $0.translation != nil }
+        if correctsOriginal, !item.originalCorrectable {
+            throw Failure(code: "original_not_correctable", message: "只有苹果本机转写的原文可以纠正，下载站点给的原文不能修改")
+        }
+        if polishesTranslation, !item.translationPolishable { throw notPolishable() }
+        guard correctsOriginal || polishesTranslation else { throw invalid("每句须提供原文或译文") }
         let snapshot = try snapshot(item)
         guard revision == snapshot.revision else {
             throw Failure(code: "subtitles_changed", message: "读取后字幕版本已经改变，请重新读取整轨再写回")
         }
         guard translations.count == snapshot.cues.count else { throw invalid("必须一次写全整轨字幕") }
-        var indexed: [Int: String] = [:]
+        var indexed: [Int: Translation] = [:]
         for value in translations {
             guard snapshot.cues.indices.contains(value.index), indexed[value.index] == nil else { throw invalid("字幕编号越界或重复") }
-            guard !value.translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  value.translation.count <= 4000,
-                  value.translation.rangeOfCharacter(from: .newlines) == nil else {
-                throw invalid("每句译文须为非空单行，且不超过 4000 字")
+            guard value.original != nil || value.translation != nil else { throw invalid("index \(value.index) 须提供原文或译文") }
+            for (label, text) in [("原文", value.original), ("译文", value.translation)] {
+                if let text { try validate(text, label: label, index: value.index) }
             }
-            // 用同一个字幕解析器预读，拒绝标签/实体/箭头或空白折叠造成的静默改写。
-            let roundTrip = VideoSubtitleTrack.parse("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n" + value.translation + "\n")
-            guard roundTrip.count == 1, roundTrip[0].text == value.translation else {
-                throw invalid("index \(value.index) 的译文含字幕标记、实体或会被解析器改写的空白，请改成普通单行文字")
-            }
-            indexed[value.index] = value.translation
+            indexed[value.index] = value
         }
         let cues = snapshot.cues.enumerated().map { index, cue in
-            VideoSubtitleCue(startTime: cue.startTime, endTime: cue.endTime,
-                             text: snapshot.translationOnly ? indexed[index]! : split(cue).original + "\n" + indexed[index]!, isSentenceBlock: true)
+            let value = indexed[index]!, current = split(cue)
+            let original = value.original ?? current.original
+            let translation = value.translation ?? current.translation
+            let text = snapshot.translationOnly ? (value.translation ?? cue.text) : [original, translation].compactMap { $0 }.joined(separator: "\n")
+            return VideoSubtitleCue(startTime: cue.startTime, endTime: cue.endTime, text: text, isSentenceBlock: true)
+        }
+        // 两个单行拼在一起也须精确往返，避免跨行的字幕标记被解析器剃掉。
+        let parsed = VideoSubtitleTrack.parse(String(decoding: encoded(cues), as: UTF8.self))
+        guard parsed.count == cues.count else {
+            let index = cues.indices.first { index in
+                !parsed.indices.contains(index)
+                    || parsed[index].startTime != cues[index].startTime
+                    || parsed[index].endTime != cues[index].endTime
+                    || parsed[index].text != cues[index].text
+            } ?? max(0, cues.count - 1)
+            let reason = cues.indices.contains(index + 1) && cues[index].text == cues[index + 1].text
+                ? "。相邻两句文字完全相同会被合并，可以保留原来的标点区分" : ""
+            throw invalid("index \(index) 的原文和译文组合会改变字幕结构\(reason)")
+        }
+        for index in cues.indices where parsed[index].text != cues[index].text {
+            throw invalid("index \(index) 的原文和译文组合会被字幕解析器改写")
         }
         var updated = item
         updated.originalSubtitlePath = snapshot.translationOnly ? nil : (item.originalSubtitlePath ?? item.subtitleFilePath)
@@ -88,12 +111,13 @@ enum SubtitleVersionStore {
         let path = folder.appendingPathComponent("\(item.id.uuidString).agent-\(updated.subtitleRevision!)-\(UUID().uuidString).vtt")
         try write(cues, to: path)
         updated.subtitleFilePath = path.path
-        updated.translationSource = "agent"
+        if correctsOriginal { updated.originalSubtitleSource = "apple" }
+        if polishesTranslation { updated.translationSource = "agent" }
         return updated
     }
 
     static func restoring(_ item: WatchItem) throws -> WatchItem {
-        guard item.translationPolishable else { throw notPolishable() }
+        guard item.translationPolishable || item.originalCorrectable else { throw notPolishable() }
         guard let initial = item.initialSubtitlePath ?? item.subtitleFilePath,
               VideoSubtitleTrack(contentsOf: URL(fileURLWithPath: initial)) != nil else { throw noSubtitles() }
         var updated = item
@@ -166,6 +190,16 @@ enum SubtitleVersionStore {
     static func split(_ cue: VideoSubtitleCue) -> (original: String, translation: String?) {
         let lines = cue.text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         return (lines.first ?? "", lines.count > 1 ? lines.dropFirst().joined(separator: " ") : nil)
+    }
+    private static func validate(_ text: String, label: String, index: Int) throws {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.count <= 4000,
+              text.rangeOfCharacter(from: .newlines) == nil else {
+            throw invalid("index \(index) 的\(label)须为非空单行，且不超过4000字")
+        }
+        let parsed = VideoSubtitleTrack.parse("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n" + text + "\n")
+        guard parsed.count == 1, parsed[0].text == text else {
+            throw invalid("index \(index) 的\(label)含字幕标记、实体或会被改写的空白，请改成普通单行文字")
+        }
     }
     private static func timestamp(_ seconds: Double) -> String {
         let ms = Int((seconds * 1000).rounded())

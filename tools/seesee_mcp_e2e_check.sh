@@ -2,6 +2,7 @@
 # seesee MCP 端到端检查，从真实入口走：启动构建好的应用，打开一段带字幕的测试视频，
 # 再起 seesee --mcp-stdio，调十个工具、验证真实播放状态，最后关掉应用走失败路径。
 # SEESEE_MCP_PROOF_DIR 指定证明目录时，还会运行真实 claude -p 会话并截取测试窗口。
+# 同时设 SEESEE_MCP_CLAUDE=0 时只截取测试窗口，不运行 claude -p 会话。
 # 用法：tools/seesee_mcp_e2e_check.sh [应用路径]，默认 dist/seesee.app（先运行 SEESEE_INSTALL_APP=0 scripts/build_app.sh）。
 # 会在后台开一个 seesee 窗口（不抢前台），跑完自动关掉。
 # 不碰正在用的 seesee：测的是换了 bundle id 的副本，偏好设置写进单独的域；

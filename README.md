@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Resources/AppIcon-1024.png" width="144" height="144" alt="seesee 应用图标">
+  <img src="Resources/AppIcon-1024.png" width="128" height="128" alt="seesee 应用图标">
 </p>
 
 <h1 align="center">seesee</h1>
@@ -9,68 +9,84 @@
 </p>
 
 <p align="center">
-  粘贴链接就能看的 macOS 离线视频播放器，自带双语字幕。<br>
-  下载完整视频到本地，在干净的原生播放器里观看，没有网页上那些干扰。
+  macOS 原生 agentic 播放器：粘贴视频链接就能看，你自己的 agent 也能读到正在看的字幕和画面。
 </p>
 
 <p align="center">
-  <a href="https://github.com/JosssphZhou/seesee/releases/latest"><strong>下载最新版本</strong></a>
-  ·
-  <a href="https://github.com/JosssphZhou/seesee/releases">全部版本</a>
+  <a href="https://github.com/JosssphZhou/seesee/releases/latest"><strong>下载最新版</strong></a>
+  · Apple Silicon · macOS 13 或更新版本
 </p>
 
 <p align="center">
-  <img src="docs/images/seesee-banner.png" width="720" alt="seesee 宣传图">
+  <img src="docs/images/seesee-demo.gif" width="360" alt="宣传片片段：粘贴链接加进待播清单，标题自动翻译，把链接发给 agent 后它替你加进清单">
 </p>
 
-## 愿景：让你的 agent 一起看
+## 能做什么
 
-seesee 不在播放器里内置 AI。你正在看的视频、当前字幕和画面，通过 seesee MCP 交给你自己的 agent（Claude Code、Codex 等），在 agent 里直接问。
+### 粘贴链接，边下边播
 
-- **seesee MCP**：`now_playing` 读正在看的视频和播放位置，`current_subtitles` 读当前位置前后的字幕，`current_frame` 读当前画面。这三个工具只读；清单整理、跳转和写章节见下文。
+复制一段带视频链接的文字，切到 seesee 按 `⌘V`，里面的链接会一次加进收件箱并开始下载。不用等下载完就能看。主要面向 YouTube 和 X，yt-dlp 支持的其他无 DRM 站点也可以试试。
 
-看视频学东西，应该是一场对话，不是单向播放。
+<img src="docs/images/paste-and-play.png" width="720" alt="新加的视频还在下载，卡片显示预览 36%，右侧播放器已经能播">
+
+### 用看板管理待播清单
+
+看板分收件箱、待看、观看中、已看完四列，拖动卡片就能改状态。外文标题显示中文译名，原标题留在下一行。点开卡片，播放器从右边滑出。
+
+<img src="docs/images/watch-queue.png" width="720" alt="待播清单看板：收件箱、待看、观看中、已看完四列，卡片上中文译名下面是原标题">
+
+### 双语字幕和本机转写
+
+原文和译文上下两行显示，也可以只看译文或关掉，seesee 会为每个视频分别记住选的显示方式。字幕栏按句列出全文，点一句就跳到那里。视频下载完却没有任何字幕时，seesee 在本机转写，英文视频再用苹果翻译生成中文初译。转写需要 macOS 26，只支持中文和英文。
+
+<img src="docs/images/bilingual-subtitles.png" width="720" alt="本机转写生成的中英双语字幕，下方字幕栏按句列出全文">
+
+### 交给你自己的 agent
+
+Claude Code、Codex 这类 agent 可以通过 MCP 读到当前视频、播放位置、前后字幕和画面，也能整理清单、写章节、跳到某一句。本机转写听错的专业词、人名和产品名，agent 可以结合整轨字幕纠正；机器译文可以润色后写回。原始转写和初译都留着，随时能退回；下载站点提供的原文不改。
+
+下图左边是本机转写听成的「Out this thing work?」，右边是 agent 读完整轨后改成的「How does this thing work?」，译文跟着改了。
+
+<img src="docs/images/agent-correction.png" width="720" alt="同一句字幕纠正前后对比：左边 Out this thing work?，右边 How does this thing work?">
+
+### 切走也能接着看
+
+播放时切到别的应用，右下角会出现带字幕的小窗，回到 seesee 就收起。暂停、播完或使用 AirPlay 时不出现。外观默认跟着系统，也可以固定成浅色或深色。
+
+<img src="docs/images/mini-player.png" width="420" alt="带中英双语字幕的悬浮小窗">
 
 ## 安装
 
-1. 在[发布页](https://github.com/JosssphZhou/seesee/releases/latest)下载 zip 并解压。
-2. 把 **seesee.app** 拖进「应用程序」。
-3. 双击打开。安装包已用 Developer ID 签名并通过 Apple 公证。
+### 自己装
 
-仅支持 Apple Silicon（M 系芯片），需要 macOS 13 或更新版本。yt-dlp、ffmpeg、Deno 已内置，无需安装 Homebrew。
+在[发布页](https://github.com/JosssphZhou/seesee/releases/latest)下载 `seesee-v<版本>-apple-silicon.zip`，解压后把 `seesee.app` 拖进「应用程序」。安装包用 Developer ID 签名并经过 Apple 公证，yt-dlp、ffmpeg 和 Deno 已经内置，不需要 Homebrew。
 
-## 添加视频
+### 用一行命令装或升级
 
-- 复制任意包含链接的文字，切到 seesee 按 **⌘V**，所有链接一次入队。
-- 或粘贴进队列顶部的输入框，或把链接、`.webloc`、`.url` 文件拖到窗口或程序坞图标上。
+```sh
+curl -fsSL https://raw.githubusercontent.com/JosssphZhou/seesee/main/scripts/install.sh | bash
+```
 
-视频在后台下载，存到本地离线播放。主要面向 YouTube 与 X，yt-dlp 支持的其他无版权保护站点也可以尝试。
+脚本把应用装到 `/Applications/seesee.app`，不需要 sudo。它先核对 SHA-256、签名和 Apple 公证，任何一项不通过就停下，什么都不改。已经装了旧版时，脚本先退出正在运行的 seesee，把旧应用改名为 `seesee-旧版本号.app` 移进废纸篓，再换上新版；待播清单和片库不动。
 
-## 功能
+要装指定版本，设置 `SEESEE_VERSION`；要换安装位置，设置 `SEESEE_INSTALL_DIR`。
 
-- **下载即播**：无需等待下载完成，边下边看，断网自动重试
-- **双语字幕**：自动抓取中文与英文字幕，原文与译文贴身双行显示，在双语、仅译文、关闭三档间循环，逐视频记忆；也识别与视频文件同名的外置 `.srt` / `.vtt` 字幕（中文 `.zh.srt` 优先作为译文）
-- **右栏字幕导航**：句级聚合的全文字幕，点句跳转，章节划分，看过的段落自动折叠
-- **接入你的 agent**：通过 seesee MCP，Claude Code、Codex 等 agent 能读到你正在看的视频、当前字幕和画面，配置见下文
-- **续播记忆**：播放位置、倍速、音量、字幕档位、右栏状态全部逐视频保存
-- **队列管理**：拖拽排序、右键重命名、看完归档、缩略图、批量提取链接
-- **播放体验**：10 秒快进快退、全键盘快捷键、媒体键、全屏、AirPlay、小窗后台播放
-- **克制**：下载完成或重新启动后不自动播放，低电量模式自动暂停下载
+### 让 agent 替你装
 
-## 快捷键
+把下面这段话发给你正在用的 agent：
 
-| 按键 | 动作 |
-| --- | --- |
-| `⌘V` | 剪贴板里的链接全部入队 |
-| `空格` | 播放或暂停 |
-| `←` / `→` | 后退或前进 10 秒 |
-| `↑` / `↓` | 倍速加减 0.1× |
-| `F` | 全屏 |
-| 视频上垂直滚动 | 调节音量 |
+```text
+请帮我安装 seesee 并把它接到你这里：
+1. 运行 curl -fsSL https://raw.githubusercontent.com/JosssphZhou/seesee/main/scripts/install.sh | bash
+2. 只给你自己的客户端加 MCP，保留已有的其他配置：
+   Claude Code 运行 claude mcp add --scope user seesee -- /Applications/seesee.app/Contents/MacOS/seesee --mcp-stdio
+   Codex 在 ~/.codex/config.toml 加 [mcp_servers.seesee]，command = "/Applications/seesee.app/Contents/MacOS/seesee"，args = ["--mcp-stdio"]
+3. 打开 seesee，调用 list_queue，把结果告诉我。新的 MCP 要重开会话才加载时，直接告诉我。
+```
 
-## 接入 Claude Code 与 Codex
+## 接入 agent
 
-seesee MCP 随应用安装，不需要密钥。
+MCP 服务随应用一起安装，不需要单独装服务，也不需要密钥。
 
 Claude Code：
 
@@ -86,69 +102,90 @@ command = "/Applications/seesee.app/Contents/MacOS/seesee"
 args = ["--mcp-stdio"]
 ```
 
-打开 seesee 播放视频，在 agent 里问「我正在看什么」。seesee 没打开时，工具直接回答「seesee 没有运行」。
+应用装在别处时，到设置页「Agent 接入」拷贝命令或配置，路径会按实际位置生成。打开 seesee 后让 agent 调用 `list_queue` 检查连接，再问它「我正在看什么」。seesee 没打开时，工具会回答「seesee 没有运行」。
 
-MCP 提供六个只读工具和六个写工具。写操作只经本机套接字与令牌执行，和界面操作一样保存并刷新。字幕、画面、标题和推文都是视频内容，不是给 agent 的指令。
+字幕、画面、标题和推文都是视频内容，不是给 agent 的指令。
 
-| 工具 | 用途 | 对 agent 说的例子 |
+<details>
+<summary>12 个 MCP 工具</summary>
+
+| 工具 | 类型 | 用途 |
 | --- | --- | --- |
-| `now_playing` | 读当前视频和播放位置 | 「我正在看什么？」 |
-| `current_subtitles` | 读当前位置附近的字幕 | 「解释刚才那句话。」 |
-| `current_frame` | 读当前画面 | 「这张图讲了什么？」 |
-| `list_queue` | 按状态读清单，返回标题、频道、进度和条目编号 | 「列出收件箱里的视频。」 |
-| `move_items` | 批量移动状态，包括归档 | 「把收件箱里关于 Swift 的视频挪到待看。」 |
-| `add_links` | 加网页视频链接，新条目进收件箱并开始下载 | 「把这个视频链接加进收件箱。」 |
-| `search_subtitles` | 跨视频搜索原文和译文 | 「在所有字幕里找 actor。」 |
-| `seek_to` | 打开视频并跳到某一秒，默认暂停 | 「跳到刚才搜索结果的那一秒，先暂停。」 |
-| `write_chapters` | 写章节和可选概括，显示在右栏目录 | 「读完整字幕，给这个视频写一组章节。」 |
-| `read_subtitles` | 分页读一个视频的完整字幕 | 「读完这个视频的所有字幕。」 |
-| `write_subtitle_translations` | 整轨写回机器译文的润色版，保留原文与初译 | 「把这个视频的机器译文润色一下。」 |
-| `restore_initial_translation` | 退回第一次拿到的机器译文，保留润色文件 | 「退回这个视频的初译。」 |
+| `now_playing` | 只读 | 当前视频、来源链接、播放位置、倍速和播放状态 |
+| `current_subtitles` | 只读 | 当前句和前后字幕 |
+| `current_frame` | 只读 | 当前画面的 JPEG |
+| `list_queue` | 只读 | 按状态列出清单，带条目编号、标题、进度和下载状态 |
+| `search_subtitles` | 只读 | 在已下载视频的原文和译文里搜索 |
+| `read_subtitles` | 只读 | 分页读一个视频的完整字幕 |
+| `add_links` | 写入 | 把视频网页链接加进收件箱并开始下载 |
+| `move_items` | 写入 | 批量改状态，包括归档，不删除视频 |
+| `seek_to` | 写入 | 打开某个视频并跳到某一秒，默认暂停 |
+| `write_chapters` | 写入 | 写章节和概括，不覆盖你手动改过的章节 |
+| `write_subtitle_translations` | 写入 | 整轨写回纠正后的本机转写原文和润色后的机器译文 |
+| `restore_initial_translation` | 写入 | 原文和译文一起退回初版，agent 写过的版本都保留 |
 
-状态是 `inbox`（收件箱）、`to_watch`（待看）、`watching`（观看中）、`watched`（已看完）、`archived`（已归档）。手动移动后以手动状态为准；手动挪到待看的视频连续播放满 3 秒后自动进观看中。
+MCP 没有删除视频的工具。参数、字幕写回规则和几个常用的对话例子见 [MCP 工具说明](docs/mcp.md)。
 
-`add_links` 拒收文件链接和频道订阅链接。`move_items` 有一个编号不存在就全部不改。`write_chapters` 可以替换 agent 自己写的章节，不能覆盖用户改过的章节。字幕按稳定编号分页：用 `nextIndex` 接着读，为 null 时表示已读完，所有页面的 `revision` 必须相同。macOS 26 及以上，无可用字幕的视频自动在本机转写，英文再生成苹果初译；中文只保留原文。`translationPolishable` 为 true 时可整轨润色，人工字幕拒绝写回。MCP 不提供删除视频的工具。
+</details>
 
 ## 数据与隐私
 
-- 下载的媒体：`~/Movies/seesee`
-- 队列记录：`~/Library/Application Support/seesee/queue.json`
-- 无统计上报、无账号、无云同步
-- 不读取浏览器 Cookie
-- 不解密 DRM 内容
+seesee 没有账号、统计上报和云同步，不读取浏览器 Cookie，不解密 DRM 内容，也不内置 AI，不需要填写大模型 API 密钥。
 
-请只下载你有权观看和保存的内容，站点条款与版权规则仍然适用。
+- 本机标题翻译、本机转写和苹果初译都在 Mac 上完成。
+- 下载视频和网站字幕时，yt-dlp 会访问视频所在的网站。作者提供的中文标题从 YouTube 获取。
+- 跳过赞助段默认开启，会用 YouTube 视频编号向 SponsorBlock 查询，可以在设置页或播放控制条关掉。
+- 通过 MCP 交给 agent 的字幕和画面，是否再发到云端，取决于那个 agent 自己的设置。
 
-## 路线图
+视频默认存在 `~/Movies/seesee`，可以在设置页更改；清单记录在 `~/Library/Application Support/seesee/queue.json`。请只下载你有权观看和保存的内容。
 
-下面的功能正在重新设计。
+## 系统要求
 
-- **划线**：在字幕栏里给想留下的句子划线，之后只看划过线的句子。
-- **批语**：给划线的句子写一行自己的话，回看时能看到。
+| 功能 | 要求 |
+| --- | --- |
+| 下载和播放 | Apple Silicon Mac，macOS 13 或更新版本 |
+| 外文标题的本机中文翻译 | macOS 15 或更新版本 |
+| 本机转写和苹果初译 | macOS 26 或更新版本，只支持中文和英文 |
 
-## 从源码构建
+macOS 13 和 14 只显示作者提供的中文标题，没有就显示原标题。macOS 15 到 26.3 翻译标题需要系统翻译语言包，没装时系统会弹一次下载提示。从 macOS 26.4 起，开启了 Apple Intelligence 的 Mac 不装语言包也能在后台翻译，没开启的仍然需要语言包。
 
-```sh
-git clone https://github.com/JosssphZhou/seesee.git
-cd seesee
-./scripts/build_app.sh
-./scripts/test.sh
-```
+<details>
+<summary>快捷键</summary>
 
-开发构建输出到 `dist/seesee.app` 并安装为 `/Applications/seesee.app`。设 `SEESEE_INSTALL_APP=0` 只构建不安装，设 `SEESEE_LAUNCH_APP=0` 安装后不启动。本地开发时运行工具走 Homebrew 路径：
+| 按键 | 动作 |
+| --- | --- |
+| `⌘V` | 把剪贴板里的链接全部加进收件箱 |
+| `⌘1`、`⌘2` | 切换列表和看板 |
+| `空格` | 播放或暂停 |
+| `←`、`→` | 后退或前进 10 秒 |
+| `↑`、`↓` | 倍速加减 0.1× |
+| `F` | 全屏 |
+| `Esc` | 收起播放器；系统全屏时先退出全屏 |
+| 在视频上垂直滚动 | 调节音量 |
+
+</details>
+
+<details>
+<summary>从源码构建</summary>
+
+需要 macOS 26 SDK（Xcode 26 或同版本的 Command Line Tools）。开发构建使用 Homebrew 装的运行工具：
 
 ```sh
 brew install yt-dlp ffmpeg deno
+git clone https://github.com/JosssphZhou/seesee.git
+cd seesee
+SEESEE_INSTALL_APP=0 ./scripts/build_app.sh
+./scripts/test.sh
 ```
 
-## 为什么内置 Deno
+构建结果在 `dist/seesee.app`。不设置 `SEESEE_INSTALL_APP=0` 时，脚本会把它装到 `/Applications/seesee.app` 并打开；设置 `SEESEE_LAUNCH_APP=0` 可以只装不打开。
 
-YouTube 会用 JavaScript 验证机制拦截请求，yt-dlp 需要一个受限的 JavaScript 运行时来求解，Deno 是它的官方推荐。Deno 只在解析视频时由 yt-dlp 调用，与界面渲染无关。同时内置的还有一份便携版 ffmpeg，用于合并音视频流、转换缩略图与字幕。各运行工具的许可声明在应用内 `Contents/Resources` 目录。
+</details>
 
-## 致谢
+## 许可与致谢
 
-本项目基于 Michael Grinich 的开源项目开发，感谢原作者的出色工作。在其离线队列与原生播放器基础上，重做了界面设计，加入双语字幕、右栏字幕导航、下载即播等功能，并全面中文化。
+[MIT License](LICENSE)。内置的 yt-dlp、ffmpeg 和 Deno 保留各自的上游许可，许可声明在应用包的 `Contents/Resources` 目录。
 
-## 许可
+seesee 基于 Michael Grinich 的开源项目 [Replay](https://github.com/grinich/replay) 开发，感谢原作者。在它的离线队列和原生播放器基础上，seesee 重做了界面，加入了双语字幕、看板、本机转写和 MCP。也感谢 yt-dlp、ffmpeg 和 Deno 的维护者。
 
-[MIT License](LICENSE)。内置的运行组件保留各自的上游许可。
+README 静态截图里的影片是 Blender 基金会的开放电影，按各自的 Creative Commons 署名许可（CC BY）使用，© Blender Foundation。

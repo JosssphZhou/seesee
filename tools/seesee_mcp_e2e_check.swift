@@ -6,7 +6,7 @@ import ApplicationServices
 
 /// seesee MCP 端到端检查：从真实入口走一遍。
 /// 启动给定构建（换了 bundle id 的副本，家目录是临时目录），打开一段带字幕和章节的测试视频，
-/// 再起 `seesee --mcp-stdio`，依次发 initialize、tools/list、tools/call 调十二个工具；
+/// 再起 `seesee --mcp-stdio`，依次发 initialize、tools/list、tools/call 调十二个工具，再切到看板视图验证 seek_to 打开面板；
 /// 最后关掉应用，确认工具返回「seesee 没有运行」且不卡住。
 /// 由 tools/seesee_mcp_e2e_check.sh 准备副本和临时家目录后调用，不碰真实的队列、片库和偏好设置。
 @main
@@ -119,7 +119,10 @@ struct SeeseeMCPEndToEndCheck {
         print("current_frame：JPEG \(bitmap.pixelsWide)×\(bitmap.pixelsHigh)，\(data.count) 字节，中心颜色 \(match.rgb) 对上第 \(frameSecond) 秒")
 
         try runQueueTools(session: session, fixture: fixture)
-        if let evidence = ProcessInfo.processInfo.environment["SEESEE_MCP_PROOF_DIR"] {
+        try runBoardSeek(session: session, fixture: fixture)
+        // SEESEE_MCP_CLAUDE=0 时只截图，不跑真实 claude -p 会话。
+        if let evidence = ProcessInfo.processInfo.environment["SEESEE_MCP_PROOF_DIR"],
+           ProcessInfo.processInfo.environment["SEESEE_MCP_CLAUDE"] != "0" {
             try runClaude(session: session, fixture: fixture, evidence: evidence)
         }
 
@@ -190,6 +193,28 @@ struct SeeseeMCPEndToEndCheck {
         try expect(replacement["replacedPrevious"] as? Bool == true, "agent 应能覆盖自己的章节")
         try error("write_chapters", ["item_id": protected, "chapters": []], "chapters_user_edited")
         print("七个新工具：真实应用正常路径、错误路径通过。视频和字幕使用明确标注的合成夹具。")
+    }
+
+    /// 看板视图下 seek_to：等同用户点了卡片，面板滑出、加载视频、跳到指定秒数；面板开着时直接换片。
+    /// 看板的播放器在面板里，面板收着时选中卡片不会加载播放器，旧代码在这里回 applied=false。
+    static func runBoardSeek(session: Session, fixture: Fixture) throws {
+        try session.switchViewMode(to: "board", keyCode: 19)
+        try session.capture("03-看板-跳转前")
+        let second = fixture.secondID.uuidString
+        let opened = try session.callJSON("seek_to", arguments: ["item_id": second, "seconds": 12, "play": false])
+        try session.capture("04-看板-跳转后")
+        try expect(opened["applied"] as? Bool == true && opened["playing"] as? Bool == false, "看板视图下 seek_to 应打开面板并跳到第 12 秒：\(opened)")
+        let openedNow = try session.callJSON("now_playing")
+        try expect(openedNow["itemID"] as? String == second, "看板面板里应是第二个检查视频：\(openedNow)")
+        try expect(abs(((openedNow["positionSeconds"] as? NSNumber)?.doubleValue ?? -100) - 12) < 1.5, "看板面板里的播放器应在第 12 秒：\(openedNow)")
+        let id = fixture.itemID.uuidString
+        let switched = try session.callJSON("seek_to", arguments: ["item_id": id, "seconds": 20, "play": true])
+        try expect(switched["applied"] as? Bool == true && switched["playing"] as? Bool == true, "面板开着时 seek_to 应直接换片并开始播放：\(switched)")
+        let switchedNow = try session.callJSON("now_playing")
+        try expect(switchedNow["itemID"] as? String == id && switchedNow["playing"] as? Bool == true, "换片后应在播第一个检查视频：\(switchedNow)")
+        _ = try session.callJSON("seek_to", arguments: ["item_id": id, "seconds": 20, "play": false])
+        try session.switchViewMode(to: "list", keyCode: 18)
+        print("看板视图 seek_to：面板收着时打开面板，seek_to 回 applied=\(opened["applied"] ?? "")，now_playing 在《\(openedNow["title"] ?? "")》\(openedNow["position"] ?? "")；面板开着时直接换片，now_playing 在《\(switchedNow["title"] ?? "")》，playing=\(switchedNow["playing"] ?? "")。")
     }
 
     static func runPlaybackRules(session: Session, fixture: Fixture) throws {
@@ -627,6 +652,28 @@ final class Session {
     /// 这里没有运行循环，NSRunningApplication.isTerminated 不会刷新，直接问进程还在不在。
     var isAppRunning: Bool {
         kill(app.processIdentifier, 0) == 0 || errno != ESRCH
+    }
+
+    /// 只给被测 pid 发 ⌘ 加数字键切换列表和看板视图，再从副本自己的偏好设置域读回结果。不移动鼠标，不抢前台。
+    func switchViewMode(to mode: String, keyCode: CGKeyCode) throws {
+        for keyDown in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: keyDown) else {
+                throw CheckFailure("建不了按键事件")
+            }
+            event.flags = .maskCommand
+            event.postToPid(app.processIdentifier)
+        }
+        guard let bundleID = app.bundleIdentifier else { throw CheckFailure("被测副本没有 bundle id") }
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            CFPreferencesAppSynchronize(bundleID as CFString)
+            if CFPreferencesCopyAppValue("libraryViewMode" as CFString, bundleID as CFString) as? String == mode {
+                Thread.sleep(forTimeInterval: 0.5)
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        } while Date() < deadline
+        throw CheckFailure("5 秒内没切到 \(mode) 视图")
     }
 
     func stopApp() throws {

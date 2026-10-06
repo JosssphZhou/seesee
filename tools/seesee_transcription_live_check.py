@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """真实隔离应用、stdio MCP、无字幕真实媒体；不发送 agent 消息、不操作键鼠。"""
 from pathlib import Path
-import argparse, hashlib, uuid, http.server, json, os, plistlib, select, shutil, signal, subprocess, tempfile, threading, time, urllib.parse
+import argparse, hashlib, uuid, http.server, json, os, plistlib, select, shutil, signal, socket, subprocess, tempfile, threading, time, urllib.parse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--media', required=True)
@@ -9,6 +9,7 @@ parser.add_argument('--language', choices=['en', 'zh'], required=True)
 parser.add_argument('--proof', required=True)
 parser.add_argument('--app', default='dist/seesee.app')
 parser.add_argument('--claude', action='store_true', help='真实 URL-only Claude 会话')
+parser.add_argument('--correct-original', action='store_true', help='真实Claude纠正原文，并核对初版退回')
 parser.add_argument('--fixtures', action='store_true', help='实际应用的下载字幕构造条目验证')
 parser.add_argument('--helper', default='/private/tmp/seesee-asr-background-codex')
 args = parser.parse_args()
@@ -16,16 +17,33 @@ proof = Path(args.proof).resolve(); proof.mkdir(parents=True, exist_ok=True)
 media = Path(args.media).resolve()
 assert media.is_file()
 root = Path(tempfile.mkdtemp(prefix='ssasr.', dir='/private/tmp')).resolve()
+if args.correct_original:
+    assert args.claude and args.language == 'en' and not args.fixtures
+bundle_id = 'ai.openmy.seesee.correct-original.' + uuid.uuid4().hex[:8] if args.correct_original else 'ai.openmy.seesee.mcp'
 app = root/'check.app'; home = root/'home'
 data_dir = home/'Library/Application Support/seesee'; movies = home/'Movies/seesee'
-queues = [Path.home() / 'Library/Application Support/seesee/queue.json']
-def hashes(): return {str(p): hashlib.sha1(p.read_bytes()).hexdigest() for p in queues if p.is_file()}
+queues = [p for p in [Path.home() / 'Library/Application Support/seesee/queue.json'] if p.is_file()]
+playback_fields = {'playbackPosition', 'watchedAt', 'watchStatus', 'hasPlayedThreeSeconds', 'inInbox'}
+def hashes():
+    if not args.correct_original:
+        return {str(p): hashlib.sha1(p.read_bytes()).hexdigest() for p in queues}
+    result = {}
+    for path in queues:
+        rows = json.loads(path.read_text())
+        fixed = [{k:v for k,v in row.items() if k not in playback_fields} for row in rows]
+        fixed.sort(key=lambda v:v['id'])
+        canonical = json.dumps(fixed,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()
+        result[str(path)] = {'itemCount':len(rows),'nonPlaybackSHA256':hashlib.sha256(canonical).hexdigest()}
+    return result
 before = hashes(); (proof/'boss-before.json').write_text(json.dumps(before, indent=2))
 pid = None; bridge = None; server = None; errorfile = None; owns_preferences = False
 prefs = root/'old-preferences.plist'; old_preferences = None
 responses = []
 agent = None; agent_output = None; agent_errors = None
 fixture_ids = []; fixture_hashes = {}
+capture_time = 8
+initial_hashes = {}
+agent_version = None
 
 class MediaHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *values): pass
@@ -65,7 +83,7 @@ def call(tool, arguments=None):
 try:
     run('ditto', str(Path(args.app).resolve()), str(app))
     plist = app/'Contents/Info.plist'
-    info = plistlib.loads(plist.read_bytes()); info['CFBundleIdentifier']='ai.openmy.seesee.mcp'; info['CFBundleExecutable']='seesee-mcp'
+    info = plistlib.loads(plist.read_bytes()); info['CFBundleIdentifier']=bundle_id; info['CFBundleExecutable']='seesee-mcp'
     plist.write_bytes(plistlib.dumps(info)); (app/'Contents/MacOS/seesee').rename(app/'Contents/MacOS/seesee-mcp')
     tools = app/'Contents/Resources/Tools'; tools.mkdir(parents=True, exist_ok=True)
     ffmpeg = shutil.which('ffmpeg'); assert ffmpeg
@@ -86,14 +104,16 @@ try:
                 'addedAt':'2026-10-06T00:00:00Z','state':'ready','progress':1,'progressLabel':'已下载','localFilePath':str(movie),'subtitleFilePath':str(en)})
         (data_dir/'queue.json').write_text(json.dumps(seeded,ensure_ascii=False))
     run(args.helper, 'preflight', str(app), stdout=subprocess.DEVNULL)
-    exported = subprocess.run(['defaults','export','ai.openmy.seesee.mcp',str(prefs)], capture_output=True)
+    exported = subprocess.run(['defaults','export',bundle_id,str(prefs)], capture_output=True)
     if exported.returncode == 0: old_preferences = prefs.read_bytes()
     owns_preferences = True
-    subprocess.run(['defaults','delete','ai.openmy.seesee.mcp'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    run('defaults','write','ai.openmy.seesee.mcp','MediaFolderPath',str(movies))
-    run('defaults','write','ai.openmy.seesee.mcp','subtitlesEnabled','-bool','true')
+    subprocess.run(['defaults','delete',bundle_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    run('defaults','write',bundle_id,'MediaFolderPath',str(movies))
+    run('defaults','write',bundle_id,'subtitlesEnabled','-bool','true')
     pid = int(subprocess.check_output([args.helper,'launch',str(app),str(home)], text=True).strip())
     (proof/'owned-pid.txt').write_text(str(pid))
+    if args.correct_original:
+        (proof/'boss-comparison-policy.json').write_text(json.dumps({'reason':'本机正式 seesee 可能正在播放并定时保存进度；只比较，不回写或恢复本机队列','ignoredPlaybackFields':sorted(playback_fields),'compare':'条目数及去掉播放字段、按id排序后的其余完整字段','ownedBundleID':bundle_id,'ownedRoot':str(root)},ensure_ascii=False,indent=2))
     env = os.environ.copy(); env['CFFIXED_USER_HOME'] = str(home)
     errorfile = (proof/'bridge-stderr.txt').open('w')
     bridge = subprocess.Popen([str(app/'Contents/MacOS/seesee-mcp'),'--mcp-stdio'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errorfile, text=True, env=env)
@@ -105,6 +125,8 @@ try:
     assert not error and listing['total'] == (2 if args.fixtures else 0), listing
     assert (data_dir/'queue.json').is_file(), 'isolated queue not created'
     assert hashes() == before, 'boss queue changed before test intake'
+    if args.correct_original:
+        run(args.helper,'screenshot',str(app),str(pid),str(proof/'before-intake.png'))
     server = http.server.ThreadingHTTPServer(('127.0.0.1',0), MediaHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f'http://127.0.0.1:{server.server_port}/'+urllib.parse.quote('字幕验证.mp4')
@@ -148,6 +170,16 @@ try:
         if state == 'ready' or (args.fixtures and state == 'not_needed'): break
         time.sleep(.3)
     assert state == ('not_needed' if args.fixtures else 'ready'), item
+    if args.correct_original:
+        assert item.get('originalCorrectable') is True, item
+        # 自动转写的状态先发布、随后延迟保存；等初版真正落盘再取校验和。
+        for _ in range(100):
+            row = next(v for v in json.loads((data_dir/'queue.json').read_text()) if v['id'] == item_id)
+            if row.get('originalSubtitlePath') and row.get('initialSubtitlePath'): break
+            time.sleep(.05)
+        assert row.get('originalSubtitlePath') and row.get('initialSubtitlePath'), 'initial subtitle files not saved'
+        assert all(str(Path(row[key]).resolve()).startswith(str(root)+'/') for key in ['originalSubtitlePath','initialSubtitlePath']), 'initial paths escaped isolated root'
+        initial_hashes = {row[key]: hashlib.sha256(Path(row[key]).read_bytes()).hexdigest() for key in ['originalSubtitlePath','initialSubtitlePath']}
     if not args.fixtures:
         assert item['transcription']['language'] == args.language, item
         assert item['transcription'].get('languageFallback') is not True, 'real known language should not use fallback'
@@ -170,6 +202,47 @@ try:
     assert track['totalCues'] > 0 and track['returned'] == track['totalCues'], track
     if args.language == 'en': assert all(v['translation'] for v in track['cues']), track
     else: assert all(v.get('translation') is None for v in track['cues']), track
+    if args.correct_original:
+        blocks = []
+        for line in (proof/'claude.jsonl').read_text().splitlines():
+            event = json.loads(line)
+            blocks.extend(v for v in event.get('message',{}).get('content',[]) if isinstance(v,dict) and v.get('type') == 'tool_use')
+        writes = [v['input'] for v in blocks if v.get('name') == 'mcp__seesee__write_subtitle_translations']
+        assert any(any('original' in v and 'translation' in v for v in write.get('translations',[])) for write in writes), 'agent did not submit both original and translation'
+        (proof/'agent-corrected-track.json').write_text(json.dumps(track,ensure_ascii=False,indent=2))
+        row = next(v for v in json.loads((data_dir/'queue.json').read_text()) if v['id'] == item_id)
+        agent_version = Path(row['subtitleFilePath']); shutil.copy2(agent_version,proof/'agent-version.vtt')
+        preferred = next((v for v in track['cues'] if 'SpeechAnalyzer' in v['original']), track['cues'][0])
+        capture_time = (preferred['start'] + preferred['end']) / 2
+        error, seek = call('seek_to', {'item_id':item_id,'seconds':capture_time,'play':False}); assert not error, seek
+        time.sleep(2)
+        opened = subprocess.run(['lsof','-nP','-p',str(pid)],capture_output=True,text=True,check=True).stdout
+        (proof/'owned-lsof.txt').write_text(opened)
+        assert not any(str(path) in opened for path in queues), 'test process opened boss queue'
+        data_lines = [line for line in opened.splitlines() if any(v in line for v in ['Application Support/seesee','/Movies/seesee/'])]
+        # lsof的unix socket写/tmp，文件写/private/tmp；先解析真实路径，不能用字符串前缀判越界。
+        data_paths = [Path(line[line.index('/'):]).resolve() for line in data_lines]
+        assert all(path.is_relative_to(home.resolve()) for path in data_paths), 'test process opened data outside isolated home'
+        (proof/'owned-open-data-paths.json').write_text(json.dumps([str(path) for path in data_paths],ensure_ascii=False,indent=2))
+        assert data_paths, 'lsof did not observe any owned queue/media file'
+        run(args.helper,'screenshot',str(app),str(pid),str(proof/'agent-corrected.png'))
+        error, restored = call('restore_initial_translation', {'item_id':item_id}); assert not error, restored
+        error, initial = call('read_subtitles', {'item_id':item_id,'max_cues':4000}); assert not error, initial
+        differences = [{'index':a['index'],'before':a['original'],'after':b['original']} for a,b in zip(initial['cues'],track['cues']) if a['original'] != b['original']]
+        assert differences, 'real ASR original was not corrected'
+        assert [(v['index'],v['start'],v['end']) for v in initial['cues']] == [(v['index'],v['start'],v['end']) for v in track['cues']], 'correction changed numbering or time'
+        assert {p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in initial_hashes} == initial_hashes, 'initial files changed'
+        assert agent_version.is_file(), 'restoring removed agent history'
+        (proof/'initial-restored-track.json').write_text(json.dumps(initial,ensure_ascii=False,indent=2))
+        (proof/'correction-differences.json').write_text(json.dumps(differences,ensure_ascii=False,indent=2))
+        time.sleep(1); run(args.helper,'screenshot',str(app),str(pid),str(proof/'initial-restored.png'))
+        # 初次agent写回已单独留图和文件；以下只用其原值重建版本，验证退回后的再写与重开。
+        values = [{k:v[k] for k in ['index','original','translation']} for v in track['cues']]
+        error, rewritten = call('write_subtitle_translations', {'item_id':item_id,'revision':initial['revision'],'translations':values}); assert not error, rewritten
+        error, track = call('read_subtitles', {'item_id':item_id,'max_cues':4000}); assert not error, track
+        assert {p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in initial_hashes} == initial_hashes
+        (proof/'immutable-initial-hashes.json').write_text(json.dumps({'before':initial_hashes,'after':{p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in initial_hashes}},indent=2))
+        print(f'original_correction_live=passed changed_cues={len(differences)} original_and_initial_immutable=true',flush=True)
     if args.fixtures:
         revision = track['revision']; cues = track['cues']
         assert len(cues) == 2 and [v['index'] for v in cues] == [0,1], track
@@ -194,9 +267,9 @@ try:
         raw_after = {v:hashlib.sha256(Path(v).read_bytes()).hexdigest() for v in fixture_hashes}
         assert raw_after == raw_before
         (proof/'downloaded-subtitle-hashes.json').write_text(json.dumps({'before':raw_before,'after':raw_after},indent=2))
-    error, playing = call('seek_to', {'item_id':item_id,'seconds':8,'play':True}); assert not error, playing
+    error, playing = call('seek_to', {'item_id':item_id,'seconds':capture_time,'play':True}); assert not error, playing
     time.sleep(.5)
-    error, seek = call('seek_to', {'item_id':item_id,'seconds':8,'play':False}); assert not error, seek
+    error, seek = call('seek_to', {'item_id':item_id,'seconds':capture_time,'play':False}); assert not error, seek
     error, paused = call('now_playing'); assert not error and paused['playing'] is False, paused
     position = paused['positionSeconds']
     time.sleep(1)
@@ -223,7 +296,7 @@ try:
         assert not error
         error, reopened = call('read_subtitles', {'item_id':item_id,'max_cues':2000}); assert not error
         assert reopened['revision'] == track['revision'], 'reopening changed the active subtitle revision'
-        error, seek = call('seek_to', {'item_id':item_id,'seconds':8,'play':False}); assert not error, seek
+        error, seek = call('seek_to', {'item_id':item_id,'seconds':capture_time,'play':False}); assert not error, seek
         time.sleep(2)
         assert json.loads((data_dir/'queue.json').read_text())[0]['subtitleFilePath'] == active_before, 'rescan replaced the polished version'
         error, visible = call('current_subtitles'); assert not error, visible
@@ -262,10 +335,19 @@ finally:
             for key in ['originalSubtitlePath','initialSubtitlePath','subtitleFilePath']:
                 if item.get(key) and Path(item[key]).is_file(): shutil.copy2(item[key],proof/Path(item[key]).name)
     if owns_preferences:
-        subprocess.run(['defaults','delete','ai.openmy.seesee.mcp'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['defaults','delete',bundle_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if old_preferences is not None:
-            prefs.write_bytes(old_preferences); run('defaults','import','ai.openmy.seesee.mcp',str(prefs), stdout=subprocess.DEVNULL)
+            prefs.write_bytes(old_preferences); run('defaults','import',bundle_id,str(prefs), stdout=subprocess.DEVNULL)
     shutil.rmtree(root)
     after=hashes(); (proof/'boss-after.json').write_text(json.dumps(after,indent=2))
+    (proof/'cleanup.txt').write_text(f'PID {pid} exited; isolated root {root} removed; server closed; own test preferences restored; boss hashes equal={after == before}.\n')
+    if args.correct_original:
+        port_closed = True
+        if server:
+            try:
+                with socket.create_connection(('127.0.0.1',server.server_port),timeout=.5): port_closed = False
+            except OSError: pass
+        preferences_removed = subprocess.run(['defaults','read',bundle_id],capture_output=True).returncode != 0 if old_preferences is None else None
+        (proof/'cleanup-readback.json').write_text(json.dumps({'rootExists':root.exists(),'mediaPortClosed':port_closed,'uniquePreferencesRemoved':preferences_removed,'bossNonPlaybackEqual':after == before,'finalOwnedPIDExited':pid},indent=2))
+        assert not root.exists() and port_closed and preferences_removed is not False, 'owned resources remain after cleanup'
     assert after == before, 'boss queues changed during isolated test'
-    (proof/'cleanup.txt').write_text(f'PID {pid} exited; isolated root {root} removed; server closed; own test preferences restored; boss hashes unchanged.\n')

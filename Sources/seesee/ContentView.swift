@@ -87,6 +87,10 @@ struct ContentView: View {
             knownItemIDs = Set(store.items.map(\.id))
             consumePendingURLs()
             consumePendingClipboardValues()
+            presentBoardPanelForAgentSeek(store.agentSeekRequest)
+        }
+        .onChange(of: store.agentSeekRequest) { request in
+            presentBoardPanelForAgentSeek(request)
         }
         .onReceive(NotificationCenter.default.publisher(for: .seeseeTextFocusShouldResign)) { _ in
             isURLFieldFocused = false
@@ -291,6 +295,18 @@ struct ContentView: View {
         .id(item.id)
         .contextMenu {
             queueRowContextMenu(item, includesRename: false)
+        }
+    }
+
+    /// agent 的 `seek_to` 在看板视图下等同用户点了这张卡片：面板滑出，面板里的播放器加载好后照请求跳转。
+    /// 面板开着时 store 已经换了选中，面板直接换片。列表视图右边一直有播放器，不用管。
+    /// 不动添加链接框的输入焦点，用户正在打字时不打断。
+    private func presentBoardPanelForAgentSeek(_ request: QueueStore.AgentSeekRequest?) {
+        guard let request, viewMode == .board else { return }
+        store.rescanLocalSubtitle(for: request.itemID)
+        guard !boardPanel.isPresented else { return }
+        withAnimation(BoardPlayerPanelState.animation) {
+            boardPanel.isPresented = true
         }
     }
 
@@ -1218,6 +1234,24 @@ private struct VideoDetail: View {
     var layout: VideoDetailLayout = .sideBySide
     /// 看板面板的收起钮；列表视图里为 nil。
     var collapsePanel: (() -> Void)?
+
+    init(
+        item: WatchItem,
+        sidebarCollapsed: Bool,
+        windowWidth: CGFloat,
+        collapseSidebar: @escaping () -> Void,
+        layout: VideoDetailLayout = .sideBySide,
+        collapsePanel: (() -> Void)? = nil
+    ) {
+        self.item = item
+        self.sidebarCollapsed = sidebarCollapsed
+        self.windowWidth = windowWidth
+        self.collapseSidebar = collapseSidebar
+        self.layout = layout
+        self.collapsePanel = collapsePanel
+        // 第一帧就用这条视频的字幕档位，不先按「关」画一帧再切过去。
+        _subtitleMode = State(initialValue: SubtitleModeStore.mode(for: item.id))
+    }
 
     var body: some View {
         Group {

@@ -70,6 +70,8 @@ struct WatchItem: Identifiable, Codable, Hashable {
 
     /// 不可变原文和首次译文；subtitleFilePath 始终是当前活动版本。
     var originalSubtitlePath: String? = nil
+    /// 原文的生成来源，独立于译文来源；只有苹果本机转写开放原文纠正。
+    var originalSubtitleSource: String? = nil
     var initialSubtitlePath: String? = nil
     var subtitleRevision: Int? = nil
     var translationSource: String? = nil
@@ -88,6 +90,15 @@ struct WatchItem: Identifiable, Codable, Hashable {
     var translationPolishable: Bool {
         let initialSource = initialTranslationSource ?? translationSource
         return initialSource == "apple" || initialSource == "youtube_auto"
+    }
+
+    var originalCorrectable: Bool {
+        guard let path = originalSubtitlePath else { return false }
+        if let source = originalSubtitleSource { return source == "apple" }
+        // 1.1.0 的本机转写没有独立来源字段，按既有苹果初译或实际转写记录兼容。
+        if (initialTranslationSource ?? translationSource) == "apple" { return true }
+        return ["en", "zh"].contains(transcriptionLanguage ?? "") &&
+            URL(fileURLWithPath: path).lastPathComponent.hasPrefix(id.uuidString + ".original-")
     }
 
     /// 待播清单状态：MCP、列表界面和看板都读这一个属性，规则见 `WatchStatus.resolve`。

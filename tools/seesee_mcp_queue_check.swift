@@ -19,6 +19,12 @@ struct SeeseeMCPQueueCheck {
     static func main() async throws {
         signal(SIGPIPE, SIG_IGN)
         _ = await MainActor.run { NSApplication.shared }
+        if CommandLine.arguments.dropFirst().first == "adjacent-originals" {
+            try await checkAdjacentOriginals(); return
+        }
+        if let mode = CommandLine.arguments.dropFirst().first, mode.hasPrefix("original-corrections") {
+            try await checkOriginalCorrections(mode: mode); return
+        }
         if CommandLine.arguments.dropFirst().first == "translation-versions" {
             try await checkTranslationVersions(); return
         }
@@ -45,6 +51,8 @@ struct SeeseeMCPQueueCheck {
         try await checkSearchSubtitles(env)
         try await checkReadSubtitles(env)
         try await checkTranslationVersions()
+        try await checkOriginalCorrections()
+        try await checkAdjacentOriginals()
         try await checkWriteChapters(env)
         try await checkSeekTo(env)
         try await checkUnreadableQueueRefusesWrites()
@@ -58,6 +66,152 @@ struct SeeseeMCPQueueCheck {
 
     static func require(_ condition: Bool, _ message: String) {
         precondition(condition, message)
+    }
+
+    struct CorrectionFailure: Error { let message: String }
+    static func correctionCheck(_ condition: Bool, _ message: String) throws {
+        if !condition { throw CorrectionFailure(message: message) }
+    }
+
+    static func checkAdjacentOriginals() async throws {
+        let root = URL(fileURLWithPath: "/private/tmp/ss-adjacent-originals-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for language in ["zh", "en"] {
+            let texts = language == "zh" ? ["排队。", "对。", "好的。"] : ["Wait.", "Yes.", "OK."]
+            let original = root.appendingPathComponent("\(inbox1).original-\(language).vtt")
+            let cues = texts.enumerated().map {
+                VideoSubtitleCue(startTime: Double($0.offset * 3), endTime: Double($0.offset * 3 + 2), text: $0.element, isSentenceBlock: true)
+            }
+            try SubtitleVersionStore.write(cues, to: original)
+            let bytes = try Data(contentsOf: original)
+            let row: [String: Any] = ["id": inbox1, "urlString": "https://example.invalid/adjacent", "title": "相邻同句检查", "author": "", "addedAt": "2026-10-01T00:00:00Z", "state": "ready", "progress": 1, "progressLabel": "已下载", "subtitleFilePath": original.path, "originalSubtitlePath": original.path, "originalSubtitleSource": "apple", "transcriptionLanguage": language, "transcriptionState": "ready"]
+            let env = try await Env.make(queueJSON: JSONSerialization.data(withJSONObject: [row]))
+            defer { env.cleanUp() }
+            let first = await env.call("read_subtitles", ["item_id": inbox1])
+            _ = try await env.savedObjects()
+            let queueBefore = try Data(contentsOf: env.dataFile)
+            let filesBefore = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+            for collision in [1, 0] {
+                var values: [[String: Any]] = texts.enumerated().map { ["index": $0.offset, "original": $0.element] }
+                values[collision]["original"] = texts[collision + 1]
+                let refused = await env.call("write_subtitle_translations", ["item_id": inbox1, "revision": first.json["revision"]!, "translations": values])
+                let message = refused.json["message"] as? String ?? ""
+                try correctionCheck(refused.isError && refused.json["error"] as? String == "invalid_arguments", "相邻同句仍须整批拒绝")
+                try correctionCheck(message.contains("index \(collision)") && message.contains("相邻两句文字完全相同会被合并") && message.contains("标点"), "相邻同句须指出真正index与合并原因，实际：\(message)")
+                let unchanged = await env.call("read_subtitles", ["item_id": inbox1])
+                try correctionCheck(unchanged.json["revision"] as? String == first.json["revision"] as? String, "同句拒绝不得改变revision")
+                try correctionCheck(try Data(contentsOf: env.dataFile) == queueBefore && Data(contentsOf: original) == bytes, "同句拒绝不得改队列或原件")
+                try correctionCheck(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted() == filesBefore, "同句拒绝不得写新版本")
+                print("adjacent_originals language=\(language) collision=\(collision) message=\(message)")
+            }
+            let values: [[String: Any]] = texts.enumerated().map { ["index": $0.offset, "original": $0.offset == 1 ? texts[2].replacingOccurrences(of: "。", with: "！").replacingOccurrences(of: ".", with: "!") : $0.element] }
+            let written = await env.call("write_subtitle_translations", ["item_id": inbox1, "revision": first.json["revision"]!, "translations": values])
+            try correctionCheck(!written.isError, "用标点区分相邻同句后须成功")
+            let read = await env.call("read_subtitles", ["item_id": inbox1])
+            try correctionCheck((read.json["cues"] as! [[String: Any]]).map { $0["original"] as! String } == values.map { $0["original"] as! String }, "区分后的整轨逐字读回")
+            try correctionCheck(try Data(contentsOf: original) == bytes, "成功纠正仍保持初版原件")
+        }
+        print("adjacent_originals_check=passed")
+    }
+
+    static func checkOriginalCorrections(mode: String = "original-corrections") async throws {
+        let root = URL(fileURLWithPath: "/private/tmp/ss-correct-original-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ids = [inbox1, inbox2, toWatch, watching]
+        var rows: [[String: Any]] = [], originals: [String: (URL, Data)] = [:], initials: [String: (URL, Data)] = [:]
+        for (position, id) in ids.enumerated() {
+            let original = root.appendingPathComponent("\(id).original-test.vtt"), initial = root.appendingPathComponent("\(id).initial-test.vtt")
+            let chinese = position == 1
+            let texts = chinese ? ["云朵代码正在运行。", "M C P连接成功。"] : ["We use cloud code.", "The M C P server works."]
+            let cues = texts.enumerated().map { VideoSubtitleCue(startTime: Double($0.offset * 3), endTime: Double($0.offset * 3 + 2), text: $0.element, isSentenceBlock: true) }
+            try SubtitleVersionStore.write(cues, to: original)
+            try SubtitleVersionStore.write(cues.map { VideoSubtitleCue(startTime: $0.startTime, endTime: $0.endTime, text: $0.text + "\n初译。", isSentenceBlock: true) }, to: initial)
+            originals[id] = (original, try Data(contentsOf: original))
+            initials[id] = (initial, try Data(contentsOf: initial))
+            var row: [String: Any] = ["id": id, "urlString": "https://example.invalid/correction", "title": "原文纠正检查", "author": "", "addedAt": "2026-10-01T00:00:00Z", "state": "ready", "progress": 1, "progressLabel": "已下载", "subtitleFilePath": (chinese ? original : initial).path, "originalSubtitlePath": original.path, "originalSubtitleSource": position < 2 ? "apple" : "download", "subtitleRevision": 1]
+            if position < 2 { row["transcriptionLanguage"] = chinese ? "zh" : "en"; row["transcriptionState"] = "ready" }
+            // 兼容1.1.0实际本机转写：尚没有独立原文来源字段。
+            if position < 2 { row.removeValue(forKey: "originalSubtitleSource") }
+            if !chinese {
+                row["initialSubtitlePath"] = initial.path
+                row["translationSource"] = position == 2 ? "author" : (position == 3 ? "youtube_auto" : "apple")
+                row["initialTranslationSource"] = row["translationSource"]
+            }
+            rows.append(row)
+        }
+        let env = try await Env.make(queueJSON: JSONSerialization.data(withJSONObject: rows)); defer { env.cleanUp() }
+        if mode == "original-corrections" || mode == "original-corrections-en" {
+            let first = await env.call("read_subtitles", ["item_id": inbox1])
+            let values: [[String: Any]] = [["index": 0, "original": "We use Claude Code.", "translation": "我们使用 Claude Code。"], ["index": 1, "original": "The MCP server works.", "translation": "MCP 服务正常运行。"]]
+            let write = await env.call("write_subtitle_translations", ["item_id": inbox1, "revision": first.json["revision"]!, "translations": values])
+            try correctionCheck(!write.isError, "本机原文和译文纠正必须成功：\(write.json)")
+            var read = await env.call("read_subtitles", ["item_id": inbox1])
+            let cues = read.json["cues"] as! [[String: Any]]
+            try correctionCheck(cues.map { $0["original"] as! String } == values.map { $0["original"] as! String }, "MCP成功后必须读回纠正原文，不能静默忽略original")
+            try correctionCheck(cues.map { $0["translation"] as! String } == values.map { $0["translation"] as! String }, "纠正译文逐字读回")
+            try correctionCheck(cues.map { $0["start"] as! Double } == [0, 3] && cues.map { $0["end"] as! Double } == [2, 5], "纠正不得改时间")
+            let search = await env.call("search_subtitles", ["query": "Claude Code", "item_ids": [inbox1]])
+            try correctionCheck(search.json["totalMatches"] as? Int == 1 && (search.json["results"] as! [[String: Any]])[0]["original"] as? String == "We use Claude Code.", "搜索显示活动版本原文")
+            let stale = await env.call("write_subtitle_translations", ["item_id": inbox1, "revision": first.json["revision"]!, "translations": values])
+            try correctionCheck(stale.isError && stale.json["error"] as? String == "subtitles_changed", "纠正后旧revision必须拒绝")
+            let translationsOnly: [[String: Any]] = [["index": 0, "translation": "我们继续使用 Claude Code。"], ["index": 1, "translation": "MCP 服务正在运行。"]]
+            let translated = await env.call("write_subtitle_translations", ["item_id": inbox1, "revision": read.json["revision"]!, "translations": translationsOnly])
+            read = await env.call("read_subtitles", ["item_id": inbox1])
+            try correctionCheck(!translated.isError && (read.json["cues"] as! [[String: Any]])[0]["original"] as? String == "We use Claude Code.", "只交译文不能把已纠正的原文换回初版")
+            let originalOnly = await env.call("write_subtitle_translations", ["item_id": inbox1, "revision": read.json["revision"]!, "translations": values.map { ["index": $0["index"]!, "original": $0["original"]!] }])
+            read = await env.call("read_subtitles", ["item_id": inbox1])
+            try correctionCheck(!originalOnly.isError && (read.json["cues"] as! [[String: Any]])[0]["translation"] as? String == "我们继续使用 Claude Code。", "只交原文时保留当前译文")
+            let saved = try await env.savedObjects()[inbox1]!, active = saved["subtitleFilePath"] as! String
+            let track = VideoSubtitleTrack(contentsOf: URL(fileURLWithPath: active))!
+            try correctionCheck(track.cues[0].text == "We use Claude Code.\n我们继续使用 Claude Code。", "右栏和画面读取的活动文件必须含纠正原文")
+            for bad in ["", "改 <div> 标签。", "a --> b", "两个  空格", "&amp;", "甲\n乙", String(repeating: "字", count: 4001)] {
+                let refused = await env.call("write_subtitle_translations", ["item_id": inbox1, "revision": read.json["revision"]!, "translations": [["index": 0, "original": "有效句。"], ["index": 1, "original": bad]]])
+                try correctionCheck(refused.isError && refused.json["error"] as? String == "invalid_arguments" && (refused.json["message"] as? String)?.contains("index 1") == true, "原文整批校验拒绝并指出编号")
+            }
+            let unchanged = await env.call("read_subtitles", ["item_id": inbox1])
+            let combined = await env.call("write_subtitle_translations", ["item_id": inbox1, "revision": read.json["revision"]!, "translations": [["index": 0, "original": "Use <", "translation": "> now."], ["index": 1, "original": "Valid."]]])
+            try correctionCheck(combined.isError && combined.json["error"] as? String == "invalid_arguments", "跨两行组合的字幕标记同样整批拒绝")
+            try correctionCheck(unchanged.json["revision"] as? String == read.json["revision"] as? String, "批量拒绝不改变版本")
+            let restored = await env.call("restore_initial_translation", ["item_id": inbox1])
+            let initial = await env.call("read_subtitles", ["item_id": inbox1])
+            try correctionCheck(!restored.isError && (initial.json["cues"] as! [[String: Any]])[0]["original"] as? String == "We use cloud code." && (initial.json["cues"] as! [[String: Any]])[0]["translation"] as? String == "初译。", "退回时原文和译文一起恢复")
+            try correctionCheck(FileManager.default.fileExists(atPath: active), "纠正历史保留")
+            print("original_correction_en=passed：真实MCP纠正/读回/搜索/活动文件/旧修订拒绝/批量拒绝/退回均通过")
+        }
+        if mode == "original-corrections" || mode == "original-corrections-zh" {
+            let first = await env.call("read_subtitles", ["item_id": inbox2])
+            let values: [[String: Any]] = [["index": 0, "original": "Claude Code 正在运行。"], ["index": 1, "original": "MCP 连接成功。"]]
+            let write = await env.call("write_subtitle_translations", ["item_id": inbox2, "revision": first.json["revision"]!, "translations": values])
+            try correctionCheck(!write.isError, "中文只交original必须成功：\(write.json)")
+            let read = await env.call("read_subtitles", ["item_id": inbox2])
+            let cues = read.json["cues"] as! [[String: Any]]
+            try correctionCheck(cues[0]["original"] as? String == "Claude Code 正在运行。" && cues[0]["translation"] is NSNull, "中文纠正后仍只含原文")
+            let onlyTranslation = await env.call("write_subtitle_translations", ["item_id": inbox2, "revision": read.json["revision"]!, "translations": [["index": 0, "translation": "甲"], ["index": 1, "translation": "乙"]]])
+            try correctionCheck(onlyTranslation.isError && onlyTranslation.json["error"] as? String == "translation_not_polishable", "中文仅译文仍拒绝")
+            let listed = await env.call("list_queue")
+            let item = (listed.json["items"] as! [[String: Any]]).first { $0["itemID"] as? String == inbox2 }!
+            try correctionCheck(item["originalCorrectable"] as? Bool == true && item["translationPolishable"] as? Bool == false, "中文原文可纠正但没有可润色译文")
+            let restored = await env.call("restore_initial_translation", ["item_id": inbox2])
+            let initial = await env.call("read_subtitles", ["item_id": inbox2])
+            try correctionCheck(!restored.isError && (initial.json["cues"] as! [[String: Any]])[0]["original"] as? String == "云朵代码正在运行。", "中文退回原始转写")
+            print("original_correction_zh=passed：只交原文成功、仅译文拒绝、列表权限正确、退回原始转写")
+        }
+        if mode == "original-corrections" || mode == "original-corrections-download" || mode == "original-corrections-youtube" {
+            for id in (mode == "original-corrections-youtube" ? [watching] : [toWatch, watching]) {
+                let first = await env.call("read_subtitles", ["item_id": id])
+                let before = try await env.savedObjects()[id]!
+                let write = await env.call("write_subtitle_translations", ["item_id": id, "revision": first.json["revision"]!, "translations": [["index": 0, "original": "Changed.", "translation": "改变。"], ["index": 1, "original": "Changed too.", "translation": "也改变。"]]])
+                try correctionCheck(write.isError && write.json["error"] as? String == "original_not_correctable", "人工或YouTube下载原文须整批拒绝original_not_correctable：\(write.json)")
+                let after = try await env.savedObjects()[id]!
+                try correctionCheck(before["subtitleFilePath"] as? String == after["subtitleFilePath"] as? String && before["subtitleRevision"] as? Int == after["subtitleRevision"] as? Int, "拒绝不能写新版本或改变revision")
+            }
+            print("download_original_refused=passed：人工和youtube_auto均拒绝，什么都没写")
+        }
+        for (_, value) in originals { try correctionCheck(try Data(contentsOf: value.0) == value.1, "原始转写和下载原文文件字节不变") }
+        for (_, value) in initials { try correctionCheck(try Data(contentsOf: value.0) == value.1, "初译文件字节不变") }
+        print("original_correction_data_protection=passed")
     }
 
     static func checkTranslationVersions() async throws {

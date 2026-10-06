@@ -340,7 +340,7 @@ final class QueueAgentProvider: AgentLinkQueryProvider {
             let (ids, missing) = QueueAgentQuery.itemIDs([parsed.itemID]) { store.item(with: $0) != nil }
             guard missing.isEmpty, let id = ids.first else { throw Failure.notFound(missing) }
             let snapshot = try store.writeSubtitleTranslations(parsed.translations, revision: parsed.revision, for: id)
-            return ["itemID": id.uuidString, "revision": snapshot.revision, "written": snapshot.cues.count, "translationSource": "agent"]
+            return ["itemID": id.uuidString, "revision": snapshot.revision, "written": snapshot.cues.count, "translationSource": store.item(with: id)?.translationSource ?? NSNull()]
         }
         return .success(payload)
     }
