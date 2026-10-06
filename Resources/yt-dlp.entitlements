@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The bundled yt-dlp is a PyInstaller one-folder build that loads its
+         Python runtime and extension modules from _internal/ next to it.
+         Both entitlements date from the one-file build, which loaded them
+         from a temporary folder. Every library is now signed with the same
+         Team ID, so library validation can be tested again later. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>
