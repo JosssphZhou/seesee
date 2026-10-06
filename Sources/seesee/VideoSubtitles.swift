@@ -4,6 +4,7 @@ struct VideoSubtitleCue: Equatable, Identifiable, Sendable {
     let startTime: Double
     let endTime: Double
     let text: String
+    var isSentenceBlock: Bool = false
 
     /// 播放器用 cue 身份区分连续字幕。仅比较文字会把相同文本的不同时间段误认为同一条。
     var id: VideoSubtitleCueID {
@@ -195,7 +196,12 @@ struct VideoSubtitleTrack: Equatable, Sendable {
         guard let source = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         let parsed = Self.parse(source)
         guard !parsed.isEmpty else { return nil }
-        cues = Self.normalizeMonolingual(parsed)
+        let sentenceBlocks = source.hasPrefix("WEBVTT\n\nNOTE seesee-sentence-blocks-v1")
+        cues = (sentenceBlocks ? parsed : Self.normalizeMonolingual(parsed)).map { cue in
+            var result = cue
+            result.isSentenceBlock = sentenceBlocks
+            return result
+        }
     }
 
     func cue(at time: Double) -> VideoSubtitleCue? {

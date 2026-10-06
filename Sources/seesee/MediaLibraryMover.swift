@@ -481,6 +481,9 @@ struct MediaLibraryMover {
             remapped[index].localFilePath = remap.remappedMediaPath(remapped[index].localFilePath)
             remapped[index].thumbnailFilePath = remap.remappedMediaPath(remapped[index].thumbnailFilePath)
             remapped[index].subtitleFilePath = remap.remappedMediaPath(remapped[index].subtitleFilePath)
+            remapped[index].originalSubtitlePath = remap.remappedMediaPath(remapped[index].originalSubtitlePath)
+            remapped[index].initialSubtitlePath = remap.remappedMediaPath(remapped[index].initialSubtitlePath)
+            remapped[index].knownSubtitlePaths = remapped[index].knownSubtitlePaths?.compactMap { remap.remappedMediaPath($0) }
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

@@ -75,17 +75,19 @@ private struct DownloadRingPulse: ViewModifier {
     }
 }
 
-/// 队列缩略图上的下载状态：压暗一层，中间一个小圆环。
+/// 队列缩略图上的下载状态：压暗一层，中间一个小圆环。看板卡片比队列行大，圆环放大到 32。
 struct DownloadThumbnailOverlay: View {
     let display: DownloadProgressDisplay.Model
+    var diameter: CGFloat = 24
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.35)
             DownloadProgressRing(
                 fraction: display.phase == .preparing ? nil : display.ringFraction,
-                diameter: 24,
-                lineWidth: 2.5,
+                diameter: diameter,
+                // 线宽随直径等比放大：24 时 2.5，32 时约 3.3。
+                lineWidth: diameter * 2.5 / 24,
                 pulsing: display.phase == .finishing
             )
             .foregroundStyle(.white)

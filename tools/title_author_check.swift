@@ -63,14 +63,14 @@ struct TitleAuthorCheck {
                 lastSeen = seen
                 log.append(String(format: "  %5.2f 秒  ", Date().timeIntervalSince(started)) + seen)
             }
-            return item.state == .ready && item.translationSource == .author
+            return item.state == .ready && item.titleTranslationSource == .author
         }
         // 本机翻译可能晚一点回来；再等一秒，确认它没有把作者标题换掉。
         try await Task.sleep(nanoseconds: 1_000_000_000)
         let detail = "\n经过：\n" + log.joined(separator: "\n")
         let item = current()
         try check(item?.originalTitle == original, "原标题不对：\(item?.originalTitle ?? "")。\(detail)")
-        try check(item?.translatedTitle == localized && item?.translationSource == .author,
+        try check(item?.translatedTitle == localized && item?.titleTranslationSource == .author,
                   "主标题应是作者的中文标题：\(item?.translatedTitle ?? "") \(item?.translatedTitleSource ?? "")。\(detail)")
         try check(item?.title == localized && item?.titleDisplay.secondary == original,
                   "显示应是中文主标题、下面一行原标题：\(String(describing: item?.titleDisplay))。\(detail)")

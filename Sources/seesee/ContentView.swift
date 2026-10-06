@@ -18,23 +18,22 @@ struct ContentView: View {
     @State private var pendingRenameID: UUID?
     @AppStorage("sidebarWatchedCollapsed") private var watchedCollapsed = false
     @AppStorage("sidebarSubscriptionsCollapsed") private var subscriptionsCollapsed = false
+    /// 收件箱、待看、观看中三个分组的折叠状态，逗号分隔；已看完和订阅沿用原来的两个键。
+    @AppStorage("sidebarCollapsedSections") private var collapsedListSections = ""
+    @AppStorage(LibraryViewMode.defaultsKey) private var viewMode: LibraryViewMode = .list
+    @AppStorage(BoardPlayerPanelMetrics.widthDefaultsKey) private var boardPanelWidth = BoardPlayerPanelMetrics.defaultWidth
+    @AppStorage(BoardArchivedColumnSetting.defaultsKey) private var showsArchivedColumn = false
+    @ObservedObject private var boardPanel = BoardPlayerPanelState.shared
     @FocusState private var isURLFieldFocused: Bool
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 272, ideal: 312, max: 360)
-                .simultaneousGesture(
-                    SpatialTapGesture(coordinateSpace: .named("seesee-window"))
-                        .onEnded(handleWindowTap)
-                )
-        } detail: {
-            detail
-                .simultaneousGesture(
-                    TapGesture().onEnded(dismissURLFieldFocus)
-                )
+        Group {
+            if viewMode == .board {
+                boardLayout
+            } else {
+                listLayout
+            }
         }
-        .navigationSplitViewStyle(.balanced)
         .onReceive(NotificationCenter.default.publisher(for: .seeseeSidebarToggle)) { notification in
             // 菜单「显示或隐藏左侧栏」（⌃⌘S）与离屏检查共用：带 collapsed 就设成指定态，否则切换。
             let target: NavigationSplitViewVisibility
@@ -53,7 +52,7 @@ struct ContentView: View {
         .onPreferenceChange(URLBarFramePreferenceKey.self) { urlBarFrame = $0 }
         .background {
             ZStack {
-                WindowStyleConfigurator(title: store.selectedItem?.titleDisplay.primary ?? "seesee")
+                WindowStyleConfigurator(title: store.selectedItem?.titleDisplay.primary ?? "seesee", layoutKey: viewMode.rawValue)
                     .frame(width: 0, height: 0)
 
                 WindowWidthReader { width in
@@ -65,13 +64,13 @@ struct ContentView: View {
         }
         .overlay(alignment: .top) {
             VStack(spacing: 8) {
-                if store.isMediaFolderDisconnected {
-                    MediaFolderDisconnectedBanner(path: DigestSettingsCopy.displayPath(store.mediaFolder))
+                if let warning = store.queueWriteWarning {
+                    QueueBackupFailureBanner(message: warning)
                         .padding(.top, 12)
                 }
-                if let warning = store.queueWriteWarning {
-                    QueueBackupFailedBanner(message: warning)
-                        .padding(.top, store.isMediaFolderDisconnected ? 0 : 12)
+                if store.isMediaFolderDisconnected {
+                    MediaFolderDisconnectedBanner(path: DigestSettingsCopy.displayPath(store.mediaFolder))
+                        .padding(.top, store.queueWriteWarning == nil ? 12 : 0)
                 }
                 if let notice = store.intakeNotice {
                     IntakeToast(notice: notice, dismiss: store.dismissIntakeNotice)
@@ -115,7 +114,7 @@ struct ContentView: View {
         .onChange(of: store.items) { items in
             DownloadProgressMemory.observe(items, isPreviewPlayable: store.isPreviewPlayable)
         }
-        .alert("添加链接失败", isPresented: Binding(
+        .alert(store.queueWriteWarning == nil ? "添加链接失败" : "无法保存改动", isPresented: Binding(
             get: { store.lastIntakeError != nil },
             set: { if !$0 { store.lastIntakeError = nil } }
         )) {
@@ -150,6 +149,161 @@ struct ContentView: View {
         }
     }
 
+    /// 列表视图：左侧栏按状态分组，右边是播放器和字幕栏。
+    private var listLayout: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            sidebar
+                .navigationSplitViewColumnWidth(min: 272, ideal: 312, max: 360)
+                .simultaneousGesture(
+                    SpatialTapGesture(coordinateSpace: .named("seesee-window"))
+                        .onEnded(handleWindowTap)
+                )
+        } detail: {
+            detail
+                .simultaneousGesture(
+                    TapGesture().onEnded(dismissURLFieldFocus)
+                )
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    /// 看板视图：顶栏下面按状态分列，点卡片从右边滑出播放器，看板留在左边。
+    private var boardLayout: some View {
+        let itemsByID = Dictionary(store.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let groups = BoardColumnGroups(store.queueItems + store.archivedItems, column: boardColumn(for:))
+        let columns = BoardColumn.boardColumns(showsArchived: showsArchivedColumn)
+        let panelItem = boardPanel.isPresented ? store.selection.flatMap { itemsByID[$0] } : nil
+
+        return VStack(spacing: 0) {
+            BoardTopBar(itemCount: store.items.count, mode: $viewMode) {
+                DropAndAddBar(
+                    urlText: $urlText,
+                    isDropTarget: $isDropTarget,
+                    isURLFieldFocused: $isURLFieldFocused,
+                    submit: submitURL,
+                    receiveProviders: receiveProviders
+                )
+            }
+            Divider()
+            HStack(spacing: 0) {
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: BoardMetrics.columnSpacing) {
+                        ForEach(columns) { column in
+                            BoardColumnView(
+                                column: column,
+                                itemIDs: groups[column],
+                                onDropItem: { moveBoardItem($0, to: column) }
+                            ) {
+                                boardColumnTrailing(column, items: groups[column].compactMap { itemsByID[$0] })
+                            } card: { id in
+                                if let item = itemsByID[id] {
+                                    boardCard(item, column: column, columns: columns)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, BoardMetrics.boardHorizontalPadding)
+                    .padding(.top, BoardMetrics.boardTopPadding)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .simultaneousGesture(TapGesture().onEnded(dismissURLFieldFocus))
+
+                if let panelItem {
+                    BoardPlayerPanel(width: $boardPanelWidth, windowWidth: windowWidth) {
+                        VideoDetail(
+                            item: panelItem,
+                            sidebarCollapsed: true,
+                            windowWidth: windowWidth,
+                            collapseSidebar: {},
+                            layout: .stacked,
+                            collapsePanel: { _ = boardPanel.collapse() }
+                        )
+                        .id(panelItem.id)
+                    }
+                    .transition(.move(edge: .trailing))
+                    .zIndex(1)
+                }
+            }
+        }
+        .background(OpenMyChrome.canvas)
+        .ignoresSafeArea(.container, edges: .top)
+        // 不设标题时 SwiftUI 会把应用名画进工具栏，露在顶栏标题左边。
+        .navigationTitle("")
+        // 列表视图的分栏自带工具栏（侧栏钮），窗口的标题栏高度和透明样式都跟着它。
+        // 看板没有分栏，留一个不可见的工具栏项，标题栏才和列表视图一样，切换时顶栏不跳。
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private func boardColumn(for item: WatchItem) -> BoardColumn {
+        BoardColumn(item.status)
+    }
+
+    /// 拖到别的列就是手动改状态，走数据层的挪动方法，立刻落盘。拖回原来那列不算。
+    @discardableResult
+    private func moveBoardItem(_ id: UUID, to column: BoardColumn) -> Bool {
+        guard let item = store.items.first(where: { $0.id == id }),
+              boardColumn(for: item) != column else { return false }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            _ = store.moveItems([id], to: column.status)
+        }
+        return true
+    }
+
+    @ViewBuilder
+    private func boardColumnTrailing(_ column: BoardColumn, items: [WatchItem]) -> some View {
+        switch column {
+        case .inbox:
+            BoardColumnHeaderButton(kind: .add) {
+                isURLFieldFocused = true
+            }
+        case .watched:
+            let candidates = BoardColumn.archiveCandidates(items)
+            if !candidates.isEmpty {
+                BoardColumnHeaderButton(kind: .archive(count: candidates.count)) {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        _ = store.moveItems(candidates, to: .archived)
+                    }
+                }
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func boardCard(_ item: WatchItem, column: BoardColumn, columns: [BoardColumn]) -> some View {
+        BoardCard(
+            item: item,
+            column: column,
+            isSelected: boardPanel.isPresented && store.selection == item.id,
+            isPreviewPlayable: store.isPreviewPlayable(item.id),
+            open: { openBoardItem(item.id) },
+            moveTo: { moveBoardItem(item.id, to: $0) },
+            availableColumns: columns
+        )
+        .equatable()
+        .id(item.id)
+        .contextMenu {
+            queueRowContextMenu(item, includesRename: false)
+        }
+    }
+
+    private func openBoardItem(_ id: UUID) {
+        dismissURLFieldFocus()
+        store.selection = id
+        store.rescanLocalSubtitle(for: id)
+        guard !boardPanel.isPresented else { return }
+        withAnimation(BoardPlayerPanelState.animation) {
+            boardPanel.isPresented = true
+        }
+    }
+
     private var sidebar: some View {
         SidebarQueueChrome {
             DropAndAddBar(
@@ -167,13 +321,19 @@ struct ContentView: View {
         }
     }
 
+    /// 列表视图的分组：观看中、收件箱、待看、已看完（含已归档）。组内顺序沿用数据层给的顺序。
+    private var listSectionGroups: BoardColumnGroups {
+        BoardColumnGroups(store.queueItems + store.archivedItems) { boardColumn(for: $0).listSection }
+    }
+
     @ViewBuilder
     private var queueList: some View {
-        let queueItems = store.queueItems
-        let archivedItems = store.archivedItems
+        let itemsByID = Dictionary(store.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let groups = listSectionGroups
+        let sections = BoardColumn.listSections.filter { !groups[$0].isEmpty }
         let subscriptions = store.channelWatch.subscriptions
 
-        if queueItems.isEmpty && archivedItems.isEmpty && subscriptions.isEmpty {
+        if sections.isEmpty && subscriptions.isEmpty {
             SidebarEmptyState()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -181,53 +341,42 @@ struct ContentView: View {
                 ScrollView(.vertical) {
                     SidebarQueueLayout.ScrollStack {
                         LazyVStack(alignment: .leading, spacing: SidebarQueueLayout.rowSpacing, pinnedViews: [.sectionHeaders]) {
-                            if !queueItems.isEmpty {
-                                ForEach(queueItems) { item in
-                                    sidebarRow(
-                                        item,
-                                        includesListTopGutter: item.id == queueItems.first?.id
-                                    )
-                                        .background {
-                                            GeometryReader { geometry in
-                                                Color.clear.preference(
-                                                    key: QueueRowFramePreferenceKey.self,
-                                                    value: [item.id: geometry.frame(in: .named("queue-list"))]
-                                                )
-                                            }
-                                        }
-                                        .simultaneousGesture(
-                                            DragGesture(
-                                                minimumDistance: QueueRowMeta.reorderDragThreshold,
-                                                coordinateSpace: .named("queue-list")
-                                            )
-                                            .onChanged { updateQueueDrag(item.id, at: $0.location) }
-                                        )
-                                }
-                            }
-
-                            if !archivedItems.isEmpty {
+                            ForEach(sections) { section in
+                                let ids = groups[section]
                                 Section {
-                                    if !watchedCollapsed {
-                                        ForEach(archivedItems) { item in
-                                            sidebarRow(
-                                                item,
-                                                includesListTopGutter: queueItems.isEmpty
-                                                    && item.id == archivedItems.first?.id
-                                            )
+                                    if !isListSectionCollapsed(section) {
+                                        ForEach(ids, id: \.self) { id in
+                                            if let item = itemsByID[id] {
+                                                sidebarRow(item)
+                                                    .background {
+                                                        GeometryReader { geometry in
+                                                            Color.clear.preference(
+                                                                key: QueueRowFramePreferenceKey.self,
+                                                                value: [item.id: geometry.frame(in: .named("queue-list"))]
+                                                            )
+                                                        }
+                                                    }
+                                                    .simultaneousGesture(
+                                                        DragGesture(
+                                                            minimumDistance: QueueRowMeta.reorderDragThreshold,
+                                                            coordinateSpace: .named("queue-list")
+                                                        )
+                                                        .onChanged { updateQueueDrag(item.id, within: ids, at: $0.location) }
+                                                    )
+                                            }
                                         }
                                     }
                                 } header: {
                                     SidebarSectionHeader(
-                                        title: "已看",
-                                        count: archivedItems.count,
-                                        systemImage: "checkmark.circle",
-                                        isCollapsed: watchedCollapsed
+                                        title: section.title,
+                                        count: ids.count,
+                                        isCollapsed: isListSectionCollapsed(section)
                                     ) {
                                         withAnimation(.easeOut(duration: 0.15)) {
-                                            watchedCollapsed.toggle()
+                                            toggleListSection(section)
                                         }
                                     }
-                                    .padding(.top, queueItems.isEmpty ? 0 : 10)
+                                    .padding(.top, section == sections.first ? SidebarQueueLayout.listTopPadding : 8)
                                 }
                             }
 
@@ -245,14 +394,13 @@ struct ContentView: View {
                                     SidebarSectionHeader(
                                         title: "订阅",
                                         count: subscriptions.count,
-                                        systemImage: "dot.radiowaves.up.forward",
                                         isCollapsed: subscriptionsCollapsed
                                     ) {
                                         withAnimation(.easeOut(duration: 0.15)) {
                                             subscriptionsCollapsed.toggle()
                                         }
                                     }
-                                    .padding(.top, queueItems.isEmpty && archivedItems.isEmpty ? 0 : 10)
+                                    .padding(.top, sections.isEmpty ? SidebarQueueLayout.listTopPadding : 8)
                                 }
                             }
                         }
@@ -268,6 +416,11 @@ struct ContentView: View {
                     let addedID = itemIDs.first { !knownItemIDs.contains($0) }
                     knownItemIDs = Set(itemIDs)
                     guard let addedID else { return }
+                    // 新加的条目所在分组收着时先展开，否则滚过去也看不到。
+                    if let added = store.items.first(where: { $0.id == addedID }) {
+                        let section = boardColumn(for: added).listSection
+                        if isListSectionCollapsed(section) { toggleListSection(section) }
+                    }
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(addedID, anchor: .top)
                     }
@@ -312,8 +465,9 @@ struct ContentView: View {
         }
     }
 
+    /// 看板卡片上没有可就地编辑的标题，菜单不放「重命名」；改名在列表视图里做。
     @ViewBuilder
-    private func queueRowContextMenu(_ item: WatchItem) -> some View {
+    private func queueRowContextMenu(_ item: WatchItem, includesRename: Bool = true) -> some View {
         let canReveal = QueueRowMeta.localFileToReveal(
             path: item.localFilePath,
             exists: { FileManager.default.fileExists(atPath: $0) }
@@ -321,7 +475,7 @@ struct ContentView: View {
         let items = QueueRowMeta.contextMenuItems(
             state: item.state,
             canRevealLocalFile: canReveal
-        )
+        ).filter { includesRename || $0 != .rename }
         ForEach(items, id: \.self) { menuItem in
             queueRowContextMenuEntry(menuItem, for: item)
         }
@@ -370,9 +524,30 @@ struct ContentView: View {
         pendingRenameID = item.id
     }
 
-    private func updateQueueDrag(_ draggedID: UUID, at location: CGPoint) {
+    private func isListSectionCollapsed(_ section: BoardColumn) -> Bool {
+        if section == .watched { return watchedCollapsed }
+        return collapsedListSections.split(separator: ",").contains(Substring(section.rawValue))
+    }
+
+    private func toggleListSection(_ section: BoardColumn) {
+        if section == .watched {
+            watchedCollapsed.toggle()
+            return
+        }
+        var collapsed = Set(collapsedListSections.split(separator: ",").map(String.init))
+        if collapsed.contains(section.rawValue) {
+            collapsed.remove(section.rawValue)
+        } else {
+            collapsed.insert(section.rawValue)
+        }
+        collapsedListSections = collapsed.sorted().joined(separator: ",")
+    }
+
+    /// 列表里拖动排序只在同一个分组里换位置。
+    private func updateQueueDrag(_ draggedID: UUID, within sectionIDs: [UUID], at location: CGPoint) {
+        let sameSection = Set(sectionIDs)
         guard let target = queueRowFrames
-            .filter({ $0.key != draggedID && $0.value.contains(location) })
+            .filter({ $0.key != draggedID && sameSection.contains($0.key) && $0.value.contains(location) })
             .min(by: { abs($0.value.midY - location.y) < abs($1.value.midY - location.y) }) else { return }
         let insertAfter = location.y >= target.value.midY
         withAnimation(.easeInOut(duration: 0.15)) {
@@ -428,18 +603,20 @@ struct ContentView: View {
     }
 
     private func receiveProviders(_ providers: [NSItemProvider]) -> Bool {
+        // 看板卡片拖到添加链接框上松手：不是链接，直接忽略，不提示。
+        guard !BoardDragPayload.isCardDrop(providers) else { return false }
         var accepted = false
         for provider in providers {
             if provider.canLoadObject(ofClass: NSURL.self) {
                 accepted = true
                 provider.loadObject(ofClass: NSURL.self) { object, _ in
-                    guard let url = object as? URL else { return }
+                    guard let url = object as? URL, !BoardDragPayload.isCardText(url.absoluteString) else { return }
                     DispatchQueue.main.async { store.accept(url) }
                 }
             } else if provider.canLoadObject(ofClass: NSString.self) {
                 accepted = true
                 provider.loadObject(ofClass: NSString.self) { object, _ in
-                    guard let text = object as? String else { return }
+                    guard let text = object as? String, !BoardDragPayload.isCardText(text) else { return }
                     DispatchQueue.main.async { store.accept(rawValue: text) }
                 }
             }
@@ -733,7 +910,15 @@ private struct QueueRow: View, Equatable {
     /// 异常态显示状态，正常态显示作者名（真信息），孤立图标会被误读成删除按钮。
     /// 下载中的文字由显示层给出：百分比、准备阶段的状态词、预览标记，不显示 yt-dlp 的原始读数。
     private func metaText(_ display: DownloadProgressDisplay.Model) -> String {
-        if !display.rowText.isEmpty { return display.rowText }
+        // 失败只说「下载失败」，排队说「等待下载」，和看板卡片同一套用词；原因在右侧失败画面里。
+        if item.state == .failed || !display.rowText.isEmpty,
+           let status = BoardCardStatusText.value(
+               isFailed: item.state == .failed,
+               downloadRowText: display.rowText,
+               watchedFraction: nil
+           ) {
+            return status.text
+        }
         return item.author.isEmpty ? item.sourceName : item.author
     }
 }
@@ -891,10 +1076,10 @@ private struct SubscriptionRow: View {
     }
 }
 
+/// 左侧栏分组头：折叠箭头在左，名字和条数，按 Paper「列表视图」画板。
 private struct SidebarSectionHeader: View {
     let title: String
     let count: Int
-    let systemImage: String
     var isCollapsed = false
     var onToggle: (() -> Void)?
 
@@ -903,21 +1088,19 @@ private struct SidebarSectionHeader: View {
             onToggle?()
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                Text(title)
-                Text("\(count)")
-                    .monospacedDigit()
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(OpenMyChrome.faint)
-                Spacer()
-                if onToggle != nil {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(OpenMyChrome.faint)
-                        .rotationEffect(.degrees(isCollapsed ? -90 : 0))
-                }
+                    .rotationEffect(.degrees(isCollapsed ? -90 : 0))
+                    .frame(width: 10, height: 10)
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(OpenMyChrome.muted)
+                Text("\(count)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(OpenMyChrome.faint)
+                Spacer(minLength: 0)
             }
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(OpenMyChrome.muted)
             .padding(.horizontal, 9)
             .padding(.vertical, 7)
             .background(OpenMyChrome.canvas)
@@ -1005,8 +1188,15 @@ private struct PaneHeaderIconButton: View {
     }
 }
 
+/// 播放器放在哪：列表视图里视频在左、字幕栏和目录在右；看板的右侧面板里视频在上、字幕栏和目录在下。
+enum VideoDetailLayout: Equatable {
+    case sideBySide
+    case stacked
+}
+
 private struct VideoDetail: View {
     @EnvironmentObject private var store: QueueStore
+    @AppStorage(LibraryViewMode.defaultsKey) private var viewMode: LibraryViewMode = .list
     @State private var subtitleMode: SubtitleDisplayMode = .off
     @AppStorage("chaptersPresented") private var chaptersPresented = true
     @State private var seekRequest: PlayerSeekRequest?
@@ -1016,7 +1206,7 @@ private struct VideoDetail: View {
     @State private var volumeHUDValue = PlaybackVolumePreference.load()
     @State private var volumeHUDVisible = false
     @State private var volumeHUDDismissalTask: Task<Void, Never>?
-    @AppStorage("skipSponsorSegments") private var skipSponsorsEnabled = true
+    @AppStorage(SponsorSkipPreference.key) private var skipSponsorsEnabled = true
     @State private var skipHUDDuration: Double?
     @State private var skipHUDVisible = false
     @State private var skipHUDDismissalTask: Task<Void, Never>?
@@ -1025,6 +1215,9 @@ private struct VideoDetail: View {
     let sidebarCollapsed: Bool
     let windowWidth: CGFloat
     let collapseSidebar: () -> Void
+    var layout: VideoDetailLayout = .sideBySide
+    /// 看板面板的收起钮；列表视图里为 nil。
+    var collapsePanel: (() -> Void)?
 
     var body: some View {
         Group {
@@ -1049,12 +1242,16 @@ private struct VideoDetail: View {
             skipHUDDismissalTask?.cancel()
             unregisterNowPlaying()
         }
-        .onAppear { syncNowPlaying() }
+        .onAppear {
+            syncNowPlaying()
+            performAgentSeekIfNeeded()
+        }
         .onChange(of: nowPlayingEntry) { _ in syncNowPlaying() }
+        .onChange(of: store.agentSeekRequest) { _ in performAgentSeekIfNeeded() }
         .onChange(of: item.subtitleFilePath) { newPath in loadSubtitles(path: newPath) }
         .onChange(of: windowWidth) { _ in collapseSidebarForNarrowChapterLayoutIfNeeded() }
         .onChange(of: sidebarCollapsed) { isCollapsed in
-            guard !isCollapsed, prefersOneSidePane, chaptersPresented else { return }
+            guard layout == .sideBySide, !isCollapsed, prefersOneSidePane, chaptersPresented else { return }
             withAnimation(.easeInOut(duration: 0.22)) {
                 chaptersPresented = false
             }
@@ -1071,7 +1268,9 @@ private struct VideoDetail: View {
 
     @ViewBuilder
     private var chapterLayout: some View {
-        if #available(macOS 14.0, *) {
+        if layout == .stacked {
+            stackedLayout
+        } else if #available(macOS 14.0, *) {
             // 侧栏有没有内容都挂同一个 inspector，不切换布局分支：边下边播时章节和字幕是播放中陆续到的，
             // 换分支会让整个播放器重建（暂停、黑一下、退回上次保存的位置）。
             centerPane
@@ -1089,6 +1288,21 @@ private struct VideoDetail: View {
                 if chaptersPresented {
                     chapterSidebar
                         .frame(minWidth: DigestBookChrome.minColumnWidth, idealWidth: 300, maxWidth: 400)
+                }
+            }
+        }
+    }
+
+    /// 看板面板：视频在上，字幕栏和目录在下，下面一块约占面板高度的四成。
+    private var stackedLayout: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                centerPane
+                if sidePanePresented.wrappedValue {
+                    Divider()
+                    chapterSidebar
+                        .frame(height: max(220, geometry.size.height * 0.42))
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
         }
@@ -1114,7 +1328,90 @@ private struct VideoDetail: View {
         .ignoresSafeArea(.container, edges: .top)
     }
 
+    @ViewBuilder
     private var centerPaneHeader: some View {
+        if layout == .stacked {
+            stackedPaneHeader
+        } else {
+            sideBySidePaneHeader
+        }
+    }
+
+    /// 看板面板顶上一行：标题和频道，右边是针对这条视频的按钮和收起钮。
+    private var stackedPaneHeader: some View {
+        HStack(spacing: PaneHeaderIconMetrics.spacing) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.boardTitle)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(OpenMyChrome.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                // 第二行和列表视图的详情顶栏一样：原标题在前，作者在后。
+                if item.titleDisplay.secondary != nil || !item.author.isEmpty {
+                    HStack(spacing: 6) {
+                        if let secondary = item.titleDisplay.secondary {
+                            Text(secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        if !item.author.isEmpty {
+                            Text(item.author)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(OpenMyChrome.muted)
+                }
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 12)
+
+            // 面板在顶栏下面，不在标题栏区域里，按钮不用 TitlebarInteractiveHost 托管；
+            // 托管的按钮会浮到窗口标题栏上，盖住看板顶栏的视图切换和齿轮。
+            PaneHeaderIconButton(
+                systemImage: "arrow.up.forward",
+                title: "打开原网页",
+                action: { store.openOriginal(item.id) }
+            )
+            .help("打开原网页")
+            PaneHeaderIconButton(
+                systemImage: item.isWatched ? "arrow.uturn.backward" : "checkmark.circle",
+                title: item.isWatched ? "移回队列" : "标记已看",
+                action: { store.toggleWatched(item.id) }
+            )
+            .help(item.isWatched ? "移回队列" : "标记已看")
+
+            if showsSidePane {
+                let title = chaptersPresented ? "隐藏字幕和目录" : "显示字幕和目录"
+                PaneHeaderIconButton(
+                    systemImage: "rectangle.bottomthird.inset.filled",
+                    title: title,
+                    action: toggleChapters
+                )
+                .help(title)
+            }
+
+            if let collapsePanel {
+                Button(action: collapsePanel) {
+                    Text("esc")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(OpenMyChrome.faint)
+                        .frame(minWidth: PaneHeaderIconMetrics.minHitSize, minHeight: PaneHeaderIconMetrics.minHitSize)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("收起播放器（Esc）")
+                .accessibilityLabel("收起播放器")
+            }
+        }
+        .padding(.leading, 20)
+        .padding(.trailing, 14)
+        .frame(height: OpenMyChrome.paneHeaderHeight)
+    }
+
+    private var sideBySidePaneHeader: some View {
         HStack(spacing: PaneHeaderIconMetrics.spacing) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.titleDisplay.primary)
@@ -1157,6 +1454,11 @@ private struct VideoDetail: View {
                 }
                 .fixedSize()
             }
+
+            TitlebarInteractiveHost {
+                LibraryViewModeToggle(mode: $viewMode)
+            }
+            .fixedSize()
 
             // 齿轮是整个应用的入口，放最右贴窗口边，与前面针对当前视频的按钮分开。
             TitlebarInteractiveHost(tooltip: DigestSettingsCopy.gearTitle) {
@@ -1274,7 +1576,8 @@ private struct VideoDetail: View {
             isPlaying: playback.isPlaying,
             isPresented: chaptersPresented,
             toggle: toggleChapters,
-            jumpAndPlay: jumpAndPlay
+            jumpAndPlay: jumpAndPlay,
+            showsHeader: layout == .sideBySide
         )
         .ignoresSafeArea(.container, edges: .top)
     }
@@ -1298,7 +1601,8 @@ private struct VideoDetail: View {
                             subtitleMode: subtitleMode,
                             sourceURLString: item.urlString,
                             skipSponsorsEnabled: skipSponsorsEnabled,
-                            onProgress: { store.updatePlaybackPosition($0, for: item.id) },
+                            onProgress: { seconds, isPlaying in store.updatePlaybackPosition(seconds, for: item.id, whilePlaying: isPlaying) },
+                            onPlaybackEvent: { store.handlePlaybackEvent($0, for: item.id) },
                             onStateChange: { playback = $0 },
                             onVolumeChange: showVolumeHUD,
                             onSponsorSkip: showSkipHUD,
@@ -1583,6 +1887,16 @@ private struct VideoDetail: View {
         applyPlaybackTimeOptimistically(time)
     }
 
+    /// agent 经 MCP 发来的 `seek_to`：只认这一条的请求，跳完清掉。
+    /// 同时写进观看进度，播放器还没建好时按续播位置打开在这一秒。
+    private func performAgentSeekIfNeeded() {
+        guard let request = store.agentSeekRequest, request.itemID == item.id else { return }
+        seekRequest = PlayerSeekRequest(time: request.seconds, shouldPlay: request.play)
+        store.updatePlaybackPosition(request.seconds, for: item.id)
+        applyPlaybackTimeOptimistically(request.seconds)
+        store.finishAgentSeekRequest(request.id)
+    }
+
     private func jumpAndPlay(_ time: Double) {
         seekRequest = PlayerSeekRequest(
             time: time,
@@ -1600,7 +1914,7 @@ private struct VideoDetail: View {
 
     private func toggleChapters() {
         let willShow = !chaptersPresented
-        if willShow, prefersOneSidePane, !sidebarCollapsed {
+        if layout == .sideBySide, willShow, prefersOneSidePane, !sidebarCollapsed {
             collapseSidebar()
         }
         withAnimation(.easeInOut(duration: 0.22)) {
@@ -1613,18 +1927,17 @@ private struct VideoDetail: View {
     }
 
     private func collapseSidebarForNarrowChapterLayoutIfNeeded() {
-        guard prefersOneSidePane, chaptersPresented, !sidebarCollapsed else { return }
+        guard layout == .sideBySide, prefersOneSidePane, chaptersPresented, !sidebarCollapsed else { return }
         collapseSidebar()
     }
 }
 
-/// 旧格式 queue.json 的升级前备份写不成时一直显示，样式照片库未连接的横幅。
-private struct QueueBackupFailedBanner: View {
+private struct QueueBackupFailureBanner: View {
     let message: String
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
+            Image(systemName: "externaldrive.badge.xmark")
                 .foregroundStyle(OpenMyChrome.rec)
             Text(message)
                 .font(.system(size: 12, weight: .semibold))
@@ -2355,6 +2668,8 @@ private struct ChapterSidebar: View {
     let isPresented: Bool
     let toggle: () -> Void
     let jumpAndPlay: (Double) -> Void
+    /// 看板面板里字幕栏排在视频下面，收起钮在面板顶上一行，不再单占一条 56 点的头。
+    var showsHeader = true
 
     @State private var activeCueIndex: Int?
     @State private var displayCues: [VideoSubtitleCue] = []
@@ -2386,8 +2701,10 @@ private struct ChapterSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
+            if showsHeader {
+                header
+                Divider()
+            }
             lyricsList
         }
         .background(OpenMyChrome.canvas)
@@ -2862,7 +3179,7 @@ private struct DropAndAddBar: View {
         .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32)
         .watchGlass(
             .clear,
-            tint: isDropTarget ? OpenMyChrome.raise : OpenMyChrome.canvas,
+            tint: isLinkDropTarget ? OpenMyChrome.raise : OpenMyChrome.canvas,
             in: RoundedRectangle(cornerRadius: OpenMyChrome.radiusLg, style: .continuous)
         )
         .overlay {
@@ -2880,11 +3197,16 @@ private struct DropAndAddBar: View {
         .onDrop(of: [UTType.url, UTType.fileURL, UTType.plainText], isTargeted: $isDropTarget, perform: receiveProviders)
     }
 
+    /// 拖着看板卡片经过时不亮，卡片不是链接。
+    private var isLinkDropTarget: Bool {
+        isDropTarget && !BoardDragPayload.isDraggingCard
+    }
+
     private var urlFieldStroke: Color {
         if isURLFieldFocused.wrappedValue {
             return OpenMyChrome.ink
         }
-        if isDropTarget {
+        if isLinkDropTarget {
             return OpenMyChrome.ink.opacity(0.35)
         }
         return OpenMyChrome.fieldBorder

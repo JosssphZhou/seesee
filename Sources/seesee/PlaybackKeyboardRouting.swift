@@ -145,3 +145,29 @@ enum PlaybackKeyboardRouting {
             || className.contains("FieldEditor")
     }
 }
+
+/// Esc 按顺序交给三方：播放器先处理（视频全屏、播放器所在窗口的系统全屏）；
+/// 播放器没处理而窗口在系统全屏时，只退出系统全屏，看板面板不动；不在全屏才收起看板面板。
+/// 下载失败的条目没有播放器，系统全屏时也要先退全屏，所以窗口全屏单独判断。
+enum PlaybackEscape {
+    enum Outcome: Equatable {
+        case player
+        case windowFullscreen
+        case boardPanel
+        case unhandled
+    }
+
+    static func handle(
+        playerExitedFullscreen: () -> Bool,
+        windowIsFullscreen: () -> Bool,
+        exitWindowFullscreen: () -> Void,
+        collapseBoardPanel: () -> Bool
+    ) -> Outcome {
+        if playerExitedFullscreen() { return .player }
+        if windowIsFullscreen() {
+            exitWindowFullscreen()
+            return .windowFullscreen
+        }
+        return collapseBoardPanel() ? .boardPanel : .unhandled
+    }
+}

@@ -21,6 +21,8 @@ enum OpenMyChrome {
     static let rowPressedHex: UInt32 = 0x333333
     /// 选中行描边。发丝线与选中底色只差一档看不出来，选中态需要亮一档的边。
     static let rowSelectedStrokeHex: UInt32 = 0x3A3A3A
+    /// 设置页分组框的底：深色比画布亮一档，和 rowHover 同值。
+    static let cardHex: UInt32 = 0x181818
 
     /// 浅色值。名字与深色一一对应，来源变量写在每行后面。
     static let lightCanvasHex: UInt32 = 0xF9F9FA // --background
@@ -39,6 +41,7 @@ enum OpenMyChrome {
     static let lightRowSelectedHex: UInt32 = 0xE3E3E8 // --accent-hover
     static let lightRowPressedHex: UInt32 = 0xDCDCE0 // css 无对应，比选中再深一档
     static let lightRowSelectedStrokeHex: UInt32 = 0xC9C9CF // --brand-5
+    static let lightCardHex: UInt32 = 0xFFFFFF // --card
 
     static let nsCanvas = NSColor(dark: canvasHex, light: lightCanvasHex)
     static let nsRaise = NSColor(dark: raiseHex, light: lightRaiseHex)
@@ -54,6 +57,7 @@ enum OpenMyChrome {
     static let nsRowSelected = NSColor(dark: rowSelectedHex, light: lightRowSelectedHex)
     static let nsRowPressed = NSColor(dark: rowPressedHex, light: lightRowPressedHex)
     static let nsRowSelectedStroke = NSColor(dark: rowSelectedStrokeHex, light: lightRowSelectedStrokeHex)
+    static let nsCard = NSColor(dark: cardHex, light: lightCardHex)
 
     static let canvas = Color(nsColor: nsCanvas)
     static let raise = Color(nsColor: nsRaise)
@@ -77,6 +81,7 @@ enum OpenMyChrome {
     static let rowSelected = Color(nsColor: nsRowSelected)
     static let rowPressed = Color(nsColor: nsRowPressed)
     static let rowSelectedStroke = Color(nsColor: nsRowSelectedStroke)
+    static let card = Color(nsColor: nsCard)
 
     /// 按下 > 选中 > 悬停 > 无底。深色下选中必须比 raise 更亮，浅色下必须比 raise 更深，
     /// 否则叠在画布上看不出点中。

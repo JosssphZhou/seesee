@@ -1185,7 +1185,8 @@ struct LocalVideoPlayer: NSViewRepresentable {
     let subtitleMode: SubtitleDisplayMode
     let sourceURLString: String
     let skipSponsorsEnabled: Bool
-    let onProgress: (Double) -> Void
+    let onProgress: (Double, Bool) -> Void
+    let onPlaybackEvent: (WatchPlaybackEvent) -> Void
     let onStateChange: (PlaybackSnapshot) -> Void
     let onVolumeChange: (Double) -> Void
     let onSponsorSkip: (Double) -> Void
@@ -1196,6 +1197,7 @@ struct LocalVideoPlayer: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onProgress: onProgress,
+            onPlaybackEvent: onPlaybackEvent,
             onStateChange: onStateChange,
             onVolumeChange: onVolumeChange,
             onSponsorSkip: onSponsorSkip,
@@ -1281,8 +1283,10 @@ struct LocalVideoPlayer: NSViewRepresentable {
         private var persistenceObserver: Any?
         private var stateObserver: Any?
         private var externalPlaybackObserver: NSKeyValueObservation?
+        private var playbackStatusObserver: NSKeyValueObservation?
         private var reachedEnd = false
-        private let onProgress: (Double) -> Void
+        private let onProgress: (Double, Bool) -> Void
+        private let onPlaybackEvent: (WatchPlaybackEvent) -> Void
         private let onStateChange: (PlaybackSnapshot) -> Void
         private let onVolumeChange: (Double) -> Void
         private let onSponsorSkip: (Double) -> Void
@@ -1313,7 +1317,8 @@ struct LocalVideoPlayer: NSViewRepresentable {
         fileprivate var currentURL: URL?
 
         init(
-            onProgress: @escaping (Double) -> Void,
+            onProgress: @escaping (Double, Bool) -> Void,
+            onPlaybackEvent: @escaping (WatchPlaybackEvent) -> Void,
             onStateChange: @escaping (PlaybackSnapshot) -> Void,
             onVolumeChange: @escaping (Double) -> Void,
             onSponsorSkip: @escaping (Double) -> Void,
@@ -1321,6 +1326,7 @@ struct LocalVideoPlayer: NSViewRepresentable {
             onUnavailable: @escaping () -> Void
         ) {
             self.onProgress = onProgress
+            self.onPlaybackEvent = onPlaybackEvent
             self.onStateChange = onStateChange
             self.onVolumeChange = onVolumeChange
             self.onSponsorSkip = onSponsorSkip
@@ -1376,6 +1382,14 @@ struct LocalVideoPlayer: NSViewRepresentable {
                     self?.externalPlaybackChanged(isActive: player.isExternalPlaybackActive)
                 }
             }
+            playbackStatusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+                DispatchQueue.main.async {
+                    guard let self, self.player === player else { return }
+                    let event: WatchPlaybackEvent = player.timeControlStatus == .playing
+                        ? .started(at: player.currentTime().seconds) : .paused
+                    self.onPlaybackEvent(event)
+                }
+            }
             persistenceObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 2, preferredTimescale: 600),
                 queue: .main
@@ -1386,7 +1400,7 @@ struct LocalVideoPlayer: NSViewRepresentable {
                     playerTime: time.seconds
                 )
                 guard seconds.isFinite else { return }
-                self.onProgress(seconds)
+                self.onProgress(seconds, self.player?.timeControlStatus == .playing && self.seekSession.pendingTime == nil && self.handoffTarget == nil && !self.resumeSeekPending)
             }
             stateObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
@@ -1435,7 +1449,8 @@ struct LocalVideoPlayer: NSViewRepresentable {
             handoffResumesPlayback = plan.shouldPlay
             // 先把换源时的位置存下来：新片段万一载入失败，续播位置也不会丢。
             // 这里在界面更新过程中，存位置会改队列，所以放到下一轮再做。
-            DispatchQueue.main.async { [onProgress] in onProgress(plan.time) }
+            DispatchQueue.main.async { [onProgress] in onProgress(plan.time, false) }
+            reportPlaybackEvent(.paused)
             player.pause()
             let playerItem = AVPlayerItem(url: url)
             playerItem.audioTimePitchAlgorithm = PlaybackAudioPolicy.timePitchAlgorithm
@@ -1546,6 +1561,9 @@ struct LocalVideoPlayer: NSViewRepresentable {
             guard lastSeekRequestID != request.id, let player else { return }
             lastSeekRequestID = request.id
             reachedEnd = false
+            // 用户或 MCP 要求暂停跳转时也清掉换源后的续播意图。
+            // 内部换源的落点检查同样传 shouldPlay=false，但要保留原来的播放意图。
+            if !request.shouldPlay { handoffResumesPlayback = false }
             beginSeek(
                 player: player,
                 to: SubtitleDispatchPolicy.presentationTime(
@@ -1573,7 +1591,7 @@ struct LocalVideoPlayer: NSViewRepresentable {
                 playerTime: current
             )
             beginSeek(player: player, to: seekTime, shouldPlay: shouldKeepPlaying)
-            onProgress(seekTime)
+            onProgress(seekTime, false)
         }
 
         @discardableResult
@@ -1583,6 +1601,11 @@ struct LocalVideoPlayer: NSViewRepresentable {
             shouldPlay: Bool,
             onLanded: ((Double) -> Void)? = nil
         ) -> UInt64 {
+            reportPlaybackEvent(.seeked)
+            if !shouldPlay {
+                reportPlaybackEvent(.paused)
+                player.pause()
+            }
             let requestID = seekSession.issue(time: seekTime)
             publishSubtitle(at: seekTime, animated: false)
             let time = CMTime(
@@ -1652,7 +1675,7 @@ struct LocalVideoPlayer: NSViewRepresentable {
             let shouldPlay = player.timeControlStatus != .paused
             reachedEnd = false
             beginSeek(player: player, to: decision.end, shouldPlay: shouldPlay)
-            onProgress(decision.end)
+            onProgress(decision.end, false)
             onSponsorSkip(decision.skippedDuration)
         }
 
@@ -1663,17 +1686,19 @@ struct LocalVideoPlayer: NSViewRepresentable {
 
         private func setPlayback(_ shouldPlay: Bool) {
             guard let player else { return }
+            if !shouldPlay { reportPlaybackEvent(.paused) }
             if handoffTarget != nil {
                 // 换片段还没落地：只记下用户的意思，落地后照办。
                 handoffResumesPlayback = shouldPlay
-                if !shouldPlay, let handoffTarget { onProgress(handoffTarget) }
+                if !shouldPlay, let handoffTarget { onProgress(handoffTarget, false) }
             } else if !shouldPlay {
                 player.pause()
                 let seconds = player.currentTime().seconds
-                if seconds.isFinite, canReportProgress { onProgress(seconds) }
+                if seconds.isFinite, canReportProgress { onProgress(seconds, false) }
             } else if player.timeControlStatus == .paused {
                 if reachedEnd {
                     reachedEnd = false
+                    reportPlaybackEvent(.seeked)
                     player.seek(to: .zero)
                 }
                 startPlayback(player)
@@ -1719,6 +1744,15 @@ struct LocalVideoPlayer: NSViewRepresentable {
 
         private func startPlayback(_ player: AVPlayer) {
             player.playImmediately(atRate: Float(preferredRate))
+            // 跳转落地后播放器可能一直处于 playing，没有新的 KVO 状态变化。
+            if player.timeControlStatus == .playing {
+                reportPlaybackEvent(.started(at: player.currentTime().seconds))
+            }
+        }
+
+        private func reportPlaybackEvent(_ event: WatchPlaybackEvent) {
+            if Thread.isMainThread { onPlaybackEvent(event) }
+            else { DispatchQueue.main.async { [onPlaybackEvent] in onPlaybackEvent(event) } }
         }
 
         private func toggleFullscreen() -> Bool {
@@ -2076,10 +2110,11 @@ struct LocalVideoPlayer: NSViewRepresentable {
             backgroundPlayerView = nil
             backgroundPanel = nil
             if let player {
+                reportPlaybackEvent(.paused)
                 player.pause()
                 attachPlayerToPrimarySurface(player)
                 let seconds = player.currentTime().seconds
-                if seconds.isFinite { onProgress(seconds) }
+                if seconds.isFinite { onProgress(seconds, false) }
             }
             publishSnapshot()
             publishCurrentSubtitle(animated: false)
@@ -2169,13 +2204,14 @@ struct LocalVideoPlayer: NSViewRepresentable {
             }
             applicationObservers.removeAll()
             if let player {
+                reportPlaybackEvent(.paused)
                 player.pause()
                 if !reachedEnd, canReportProgress {
                     let seconds = PlaybackHandoffPolicy.reportedTime(
                         handoffTarget: handoffTarget,
                         playerTime: player.currentTime().seconds
                     )
-                    if seconds.isFinite { onProgress(seconds) }
+                    if seconds.isFinite { onProgress(seconds, false) }
                 }
                 if let persistenceObserver {
                     player.removeTimeObserver(persistenceObserver)
@@ -2201,6 +2237,7 @@ struct LocalVideoPlayer: NSViewRepresentable {
             persistenceObserver = nil
             stateObserver = nil
             externalPlaybackObserver = nil
+            playbackStatusObserver = nil
             player = nil
             if let endObserver {
                 NotificationCenter.default.removeObserver(endObserver)

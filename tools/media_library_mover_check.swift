@@ -106,7 +106,9 @@ struct MediaLibraryMoverCheck {
         try Data("subtitle-line".utf8).write(to: subtitle)
         try Data("nested-note".utf8).write(to: nested)
         try Data("skip-me".utf8).write(to: env.source.appendingPathComponent(".DS_Store"))
-        try writeQueue([sampleItem(id: id, local: video.path, thumbnail: thumb.path, subtitle: subtitle.path)], env)
+        var item = sampleItem(id: id, local: video.path, thumbnail: thumb.path, subtitle: subtitle.path)
+        item.knownSubtitlePaths = [subtitle.path]
+        try writeQueue([item], env)
         let originalQueue = try Data(contentsOf: env.dataFile)
 
         var progressEvents: [MediaLibraryMoveProgress] = []
@@ -131,6 +133,7 @@ struct MediaLibraryMoverCheck {
         precondition(rewritten[0].localFilePath == env.destination.appendingPathComponent("\(id.uuidString).mp4").path)
         precondition(rewritten[0].thumbnailFilePath == env.destination.appendingPathComponent("\(id.uuidString).jpg").path)
         precondition(rewritten[0].subtitleFilePath == env.destination.appendingPathComponent("\(id.uuidString).zh.srt").path)
+        precondition(rewritten[0].knownSubtitlePaths == [env.destination.appendingPathComponent("\(id.uuidString).zh.srt").path], "搬移必须映射已登记的全部字幕轨")
 
         let backup = env.support.appendingPathComponent("queue.json.bak-\(backupStamp(env.now))")
         precondition(try! Data(contentsOf: backup) == originalQueue, "备份必须是改写前的内容")

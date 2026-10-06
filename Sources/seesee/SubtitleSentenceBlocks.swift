@@ -29,6 +29,12 @@ enum SubtitleSentenceBlocks {
         }
 
         for cue in cues {
+            // 生成版本已按不可变原文分句，重复显示或读取时不再次合并。
+            if cue.isSentenceBlock {
+                flush()
+                blocks.append(cue)
+                continue
+            }
             let lines = cue.text
                 .components(separatedBy: "\n")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

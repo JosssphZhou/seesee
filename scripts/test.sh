@@ -42,6 +42,16 @@ compile_and_run resume_model \
     "$project_dir/Sources/seesee/ChapterMetadata.swift" \
     "$project_dir/tools/resume_model_check.swift"
 
+compile_and_run board_layout \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/LibraryViewMode.swift" \
+    "$project_dir/Sources/seesee/BoardColumns.swift" \
+    "$project_dir/tools/board_layout_check.swift"
+
 compile_and_run subtitle_parser \
     "$project_dir/Sources/seesee/VideoSubtitles.swift" \
     "$project_dir/tools/subtitle_parser_check.swift"
@@ -68,6 +78,8 @@ compile_and_run power_mode \
     "$project_dir/tools/power_mode_check.swift"
 
 compile_and_run playback_command \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
     "$project_dir/Sources/seesee/VideoSubtitles.swift" \
     "$project_dir/Sources/seesee/SubtitleOverlayLayout.swift" \
     "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
@@ -103,7 +115,7 @@ compile_and_run download_progress_display \
 # 引擎必须带 --progress：参数里有 --print 时 yt-dlp 进入安静模式，不出进度。
 # 假 yt-dlp 放在检查程序自己的目录里（引擎找工具的第一个位置），所以单独一个子目录。
 mkdir -p "$scratch_dir/download_engine_progress"
-compile_and_run download_engine_progress/check \
+compile_and_run download_engine_progress \
     "$project_dir/Sources/seesee/WatchItem.swift" \
     "$project_dir/Sources/seesee/ChapterMetadata.swift" \
     "$project_dir/Sources/seesee/SubtitleTrackRank.swift" \
@@ -259,8 +271,12 @@ compile_and_run media_library_mover \
 compile_and_run media_folder_settings_proof \
     "$project_dir/Sources/seesee/OpenMyChrome.swift" \
     "$project_dir/Sources/seesee/MediaFolderCopy.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
     "$project_dir/Sources/seesee/DigestSettings.swift" \
     "$project_dir/Sources/seesee/DigestSettingsView.swift" \
+    "$project_dir/Sources/seesee/LibraryViewMode.swift" \
     "$project_dir/tools/media_folder_settings_proof.swift"
 
 # 删除接线：经真实生产入口 QueueStore.remove（注入隔离目录）验证 qa sidecar 一并清掉。
@@ -287,6 +303,11 @@ compile_and_run qa_remove \
     "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
     "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
     "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
     "$project_dir/Sources/seesee/SponsorSkip.swift" \
     "$project_dir/Sources/seesee/VideoTitle.swift" \
     "$project_dir/Sources/seesee/TitleTranslation.swift" \
@@ -315,10 +336,286 @@ compile_and_run media_folder_store \
     "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
     "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
     "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
     "$project_dir/Sources/seesee/SponsorSkip.swift" \
     "$project_dir/Sources/seesee/VideoTitle.swift" \
     "$project_dir/Sources/seesee/TitleTranslation.swift" \
     "$project_dir/tools/media_folder_store_check.swift"
+
+# 待播清单状态：旧 queue.json 迁移、升级前备份、各动作怎么改状态（经真实 QueueStore，隔离目录）。
+compile_and_run queue_status_migration \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleTrackRank.swift" \
+    "$project_dir/Sources/seesee/NetworkMonitor.swift" \
+    "$project_dir/Sources/seesee/PowerModeMonitor.swift" \
+    "$project_dir/Sources/seesee/AppFolders.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/URLIntake.swift" \
+    "$project_dir/Sources/seesee/DownloadRetryPolicy.swift" \
+    "$project_dir/Sources/seesee/ChannelLink.swift" \
+    "$project_dir/Sources/seesee/PlaylistListing.swift" \
+    "$project_dir/Sources/seesee/ChannelSubscription.swift" \
+    "$project_dir/Sources/seesee/DownloadEngine.swift" \
+    "$project_dir/Sources/seesee/ChannelWatchStore.swift" \
+    "$project_dir/Sources/seesee/MediaFolderCopy.swift" \
+    "$project_dir/Sources/seesee/MediaFolderAvailability.swift" \
+    "$project_dir/Sources/seesee/MediaFolderPreference.swift" \
+    "$project_dir/Sources/seesee/MediaFolderLaunchArguments.swift" \
+    "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
+    "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
+    "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
+    "$project_dir/tools/queue_status_migration_check.swift"
+
+compile_and_run seesee_mcp_queue \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleTrackRank.swift" \
+    "$project_dir/Sources/seesee/NetworkMonitor.swift" \
+    "$project_dir/Sources/seesee/PowerModeMonitor.swift" \
+    "$project_dir/Sources/seesee/AppFolders.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/URLIntake.swift" \
+    "$project_dir/Sources/seesee/DownloadRetryPolicy.swift" \
+    "$project_dir/Sources/seesee/ChannelLink.swift" \
+    "$project_dir/Sources/seesee/PlaylistListing.swift" \
+    "$project_dir/Sources/seesee/ChannelSubscription.swift" \
+    "$project_dir/Sources/seesee/DownloadEngine.swift" \
+    "$project_dir/Sources/seesee/ChannelWatchStore.swift" \
+    "$project_dir/Sources/seesee/MediaFolderCopy.swift" \
+    "$project_dir/Sources/seesee/MediaFolderAvailability.swift" \
+    "$project_dir/Sources/seesee/MediaFolderPreference.swift" \
+    "$project_dir/Sources/seesee/MediaFolderLaunchArguments.swift" \
+    "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
+    "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
+    "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
+    "$project_dir/Sources/seesee/AgentLink.swift" \
+    "$project_dir/Sources/seesee/NowPlayingQuery.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/DigestTranscriptSearch.swift" \
+    "$project_dir/Sources/seesee/QueueAgentQuery.swift" \
+    "$project_dir/Sources/seesee/QueueAgentProvider.swift" \
+    "$project_dir/Sources/seesee/SeeseeMCPBridge.swift" \
+    "$project_dir/tools/seesee_mcp_queue_check.swift"
+
+compile_and_run queue_state_rework \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleTrackRank.swift" \
+    "$project_dir/Sources/seesee/NetworkMonitor.swift" \
+    "$project_dir/Sources/seesee/PowerModeMonitor.swift" \
+    "$project_dir/Sources/seesee/AppFolders.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/URLIntake.swift" \
+    "$project_dir/Sources/seesee/DownloadRetryPolicy.swift" \
+    "$project_dir/Sources/seesee/ChannelLink.swift" \
+    "$project_dir/Sources/seesee/PlaylistListing.swift" \
+    "$project_dir/Sources/seesee/ChannelSubscription.swift" \
+    "$project_dir/Sources/seesee/DownloadEngine.swift" \
+    "$project_dir/Sources/seesee/ChannelWatchStore.swift" \
+    "$project_dir/Sources/seesee/MediaFolderCopy.swift" \
+    "$project_dir/Sources/seesee/MediaFolderAvailability.swift" \
+    "$project_dir/Sources/seesee/MediaFolderPreference.swift" \
+    "$project_dir/Sources/seesee/MediaFolderLaunchArguments.swift" \
+    "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
+    "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
+    "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
+    "$project_dir/tools/queue_state_rework_check.swift"
+
+compile_and_run subtitle_version_storage \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleTrackRank.swift" \
+    "$project_dir/Sources/seesee/NetworkMonitor.swift" \
+    "$project_dir/Sources/seesee/PowerModeMonitor.swift" \
+    "$project_dir/Sources/seesee/AppFolders.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/URLIntake.swift" \
+    "$project_dir/Sources/seesee/DownloadRetryPolicy.swift" \
+    "$project_dir/Sources/seesee/ChannelLink.swift" \
+    "$project_dir/Sources/seesee/PlaylistListing.swift" \
+    "$project_dir/Sources/seesee/ChannelSubscription.swift" \
+    "$project_dir/Sources/seesee/DownloadEngine.swift" \
+    "$project_dir/Sources/seesee/ChannelWatchStore.swift" \
+    "$project_dir/Sources/seesee/MediaFolderCopy.swift" \
+    "$project_dir/Sources/seesee/MediaFolderAvailability.swift" \
+    "$project_dir/Sources/seesee/MediaFolderPreference.swift" \
+    "$project_dir/Sources/seesee/MediaFolderLaunchArguments.swift" \
+    "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
+    "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
+    "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
+    "$project_dir/tools/subtitle_version_storage_check.swift"
+
+compile_and_run queue_transcription_scope \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleTrackRank.swift" \
+    "$project_dir/Sources/seesee/NetworkMonitor.swift" \
+    "$project_dir/Sources/seesee/PowerModeMonitor.swift" \
+    "$project_dir/Sources/seesee/AppFolders.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/URLIntake.swift" \
+    "$project_dir/Sources/seesee/DownloadRetryPolicy.swift" \
+    "$project_dir/Sources/seesee/ChannelLink.swift" \
+    "$project_dir/Sources/seesee/PlaylistListing.swift" \
+    "$project_dir/Sources/seesee/ChannelSubscription.swift" \
+    "$project_dir/Sources/seesee/DownloadEngine.swift" \
+    "$project_dir/Sources/seesee/ChannelWatchStore.swift" \
+    "$project_dir/Sources/seesee/MediaFolderCopy.swift" \
+    "$project_dir/Sources/seesee/MediaFolderAvailability.swift" \
+    "$project_dir/Sources/seesee/MediaFolderPreference.swift" \
+    "$project_dir/Sources/seesee/MediaFolderLaunchArguments.swift" \
+    "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
+    "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
+    "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
+    "$project_dir/tools/queue_transcription_scope_check.swift"
+
+compile_and_run subtitle_metadata_recovery \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleTrackRank.swift" \
+    "$project_dir/Sources/seesee/NetworkMonitor.swift" \
+    "$project_dir/Sources/seesee/PowerModeMonitor.swift" \
+    "$project_dir/Sources/seesee/AppFolders.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/URLIntake.swift" \
+    "$project_dir/Sources/seesee/DownloadRetryPolicy.swift" \
+    "$project_dir/Sources/seesee/ChannelLink.swift" \
+    "$project_dir/Sources/seesee/PlaylistListing.swift" \
+    "$project_dir/Sources/seesee/ChannelSubscription.swift" \
+    "$project_dir/Sources/seesee/DownloadEngine.swift" \
+    "$project_dir/Sources/seesee/ChannelWatchStore.swift" \
+    "$project_dir/Sources/seesee/MediaFolderCopy.swift" \
+    "$project_dir/Sources/seesee/MediaFolderAvailability.swift" \
+    "$project_dir/Sources/seesee/MediaFolderPreference.swift" \
+    "$project_dir/Sources/seesee/MediaFolderLaunchArguments.swift" \
+    "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
+    "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
+    "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
+    "$project_dir/tools/subtitle_metadata_recovery_check.swift"
+
+compile_and_run transcription_recovery \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleTrackRank.swift" \
+    "$project_dir/Sources/seesee/NetworkMonitor.swift" \
+    "$project_dir/Sources/seesee/PowerModeMonitor.swift" \
+    "$project_dir/Sources/seesee/AppFolders.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/URLIntake.swift" \
+    "$project_dir/Sources/seesee/DownloadRetryPolicy.swift" \
+    "$project_dir/Sources/seesee/ChannelLink.swift" \
+    "$project_dir/Sources/seesee/PlaylistListing.swift" \
+    "$project_dir/Sources/seesee/ChannelSubscription.swift" \
+    "$project_dir/Sources/seesee/DownloadEngine.swift" \
+    "$project_dir/Sources/seesee/ChannelWatchStore.swift" \
+    "$project_dir/Sources/seesee/MediaFolderCopy.swift" \
+    "$project_dir/Sources/seesee/MediaFolderAvailability.swift" \
+    "$project_dir/Sources/seesee/MediaFolderPreference.swift" \
+    "$project_dir/Sources/seesee/MediaFolderLaunchArguments.swift" \
+    "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
+    "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
+    "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
+    "$project_dir/tools/transcription_recovery_check.swift"
+
+compile_and_run queue_backup_write \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/SponsorSkip.swift" \
+    "$project_dir/Sources/seesee/TitleTranslation.swift" \
+    "$project_dir/Sources/seesee/VideoTitle.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
+    "$project_dir/Sources/seesee/VideoSubtitles.swift" \
+    "$project_dir/Sources/seesee/SubtitleTrackRank.swift" \
+    "$project_dir/Sources/seesee/NetworkMonitor.swift" \
+    "$project_dir/Sources/seesee/PowerModeMonitor.swift" \
+    "$project_dir/Sources/seesee/AppFolders.swift" \
+    "$project_dir/Sources/seesee/QueueRowMeta.swift" \
+    "$project_dir/Sources/seesee/URLIntake.swift" \
+    "$project_dir/Sources/seesee/DownloadRetryPolicy.swift" \
+    "$project_dir/Sources/seesee/ChannelLink.swift" \
+    "$project_dir/Sources/seesee/PlaylistListing.swift" \
+    "$project_dir/Sources/seesee/ChannelSubscription.swift" \
+    "$project_dir/Sources/seesee/DownloadEngine.swift" \
+    "$project_dir/Sources/seesee/ChannelWatchStore.swift" \
+    "$project_dir/Sources/seesee/MediaFolderCopy.swift" \
+    "$project_dir/Sources/seesee/MediaFolderAvailability.swift" \
+    "$project_dir/Sources/seesee/MediaFolderPreference.swift" \
+    "$project_dir/Sources/seesee/MediaFolderLaunchArguments.swift" \
+    "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
+    "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
+    "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
+    "$project_dir/tools/queue_backup_write_check.swift"
 
 # 更改片库位置的数据安全：旧位置一个不删；复制中途、核对失败、改写队列中途退出后启动退回；queue.json 坏了不动文件。
 compile_and_run media_folder_move_safety \
@@ -344,6 +641,11 @@ compile_and_run media_folder_move_safety \
     "$project_dir/Sources/seesee/MediaLibraryMover.swift" \
     "$project_dir/Sources/seesee/PlayerReadyDecision.swift" \
     "$project_dir/Sources/seesee/QueueStore.swift" \
+    "$project_dir/Sources/seesee/TranscriptionModelStatus.swift" \
+    "$project_dir/Sources/seesee/AppleSpeechModelBackend.swift" \
+    "$project_dir/Sources/seesee/LocalTranscription.swift" \
+    "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
+    "$project_dir/Sources/seesee/SubtitleVersionStore.swift" \
     "$project_dir/Sources/seesee/SponsorSkip.swift" \
     "$project_dir/Sources/seesee/VideoTitle.swift" \
     "$project_dir/Sources/seesee/TitleTranslation.swift" \
@@ -395,6 +697,11 @@ compile_and_run agent_link \
     "$project_dir/Sources/seesee/AgentLink.swift" \
     "$project_dir/tools/agent_link_check.swift"
 
+compile_and_run agent_link_capacity -O \
+    "$project_dir/Sources/seesee/AppFolders.swift" \
+    "$project_dir/Sources/seesee/AgentLink.swift" \
+    "$project_dir/tools/agent_link_capacity_check.swift"
+
 # MCP 端到端（从真实入口走）：启动 dist/seesee.app 的副本、在后台开一个窗口，默认不跑。
 # 先运行 SEESEE_INSTALL_APP=0 scripts/build_app.sh，再设 SEESEE_MCP_E2E=1 跑这一条。
 if [[ "${SEESEE_MCP_E2E:-0}" == "1" ]]; then
@@ -445,6 +752,8 @@ echo "lan_player_cli_bind=passed"
 
 # 看视频时屏幕不熄：主窗口、全屏、悬浮小窗共用的播放器必须阻止播放期间熄屏。
 compile_and_run display_sleep \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
     "$project_dir/Sources/seesee/VideoSubtitles.swift" \
     "$project_dir/Sources/seesee/SubtitleOverlayLayout.swift" \
     "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \
@@ -455,6 +764,8 @@ compile_and_run display_sleep \
 
 # 播放器字幕换句零位移：离屏驱动真实浮层，逐帧断言底边、底条尺寸与旧句位置。
 compile_and_run subtitle_overlay_stability \
+    "$project_dir/Sources/seesee/WatchItem.swift" \
+    "$project_dir/Sources/seesee/ChapterMetadata.swift" \
     "$project_dir/Sources/seesee/VideoSubtitles.swift" \
     "$project_dir/Sources/seesee/SubtitleOverlayLayout.swift" \
     "$project_dir/Sources/seesee/SubtitleSentenceBlocks.swift" \

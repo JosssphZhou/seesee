@@ -29,6 +29,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pasteMonitor: Any?
     private var mediaKeyMonitor: Any?
     private var agentLink: AgentLinkServer?
+    private let queueAgent = QueueAgentProvider(store: nil) { itemID in
+        let snapshot = NowPlayingRegistry.shared.snapshot()
+        guard let context = snapshot.context, context.entry.item.id == itemID else { return nil }
+        return QueueAgentProvider.PlaybackReadback(seconds: context.clock.seconds, isPlaying: context.clock.isPlaying)
+    }
+
+    /// SwiftUI 建好 `QueueStore` 后接到查询通道上，待播清单的七个工具才能读写。
+    func attachQueueStore(_ store: QueueStore) {
+        queueAgent.store = store
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         OpenMyChrome.applyAppearance()
@@ -93,7 +103,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     return nil
                 case .exitFullscreen:
-                    return PlaybackCommandCenter.shared.exitFullscreen() ? nil : event
+                    // 全屏时先退出全屏；不在全屏、看板的播放器面板开着时收起面板。
+                    let outcome = PlaybackEscape.handle(
+                        playerExitedFullscreen: { PlaybackCommandCenter.shared.exitFullscreen() },
+                        windowIsFullscreen: { window?.styleMask.contains(.fullScreen) == true },
+                        exitWindowFullscreen: { window?.toggleFullScreen(nil) },
+                        collapseBoardPanel: { BoardPlayerPanelState.shared.collapse() }
+                    )
+                    return outcome == .unhandled ? event : nil
                 case .skip(let seconds):
                     return PlaybackCommandCenter.shared.skip(by: seconds) ? nil : event
                 case .adjustRate(let delta):
@@ -125,12 +142,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 本机只读查询通道：给 `seesee --mcp-stdio` 桥接进程查正在看的位置、字幕和画面。
+    /// 本机查询通道：给 `seesee --mcp-stdio` 桥接进程查正在看的位置、字幕和画面，读写待播清单。
     /// 路径被别的文件占住或过长时不启动，只记日志，不影响播放。
     private func startAgentLink() {
         let server = AgentLinkServer(
             paths: .standard(),
-            provider: NowPlayingAgentProvider(),
+            provider: AgentLinkRouter(nowPlaying: NowPlayingAgentProvider(), queue: queueAgent),
             log: { NSLog("seesee 查询通道：%@", $0) }
         )
         if server.start() == .started {

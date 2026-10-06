@@ -14,9 +14,11 @@ struct MediaFolderMoveSafetyCheck {
         await run("verify_failure_in_process", checkVerifyFailureInProcess)
         await run("interrupt_during_queue_rewrite", checkInterruptDuringQueueRewrite)
         await run("interrupt_after_preference_saved", checkInterruptAfterPreferenceSaved)
+        await run("legacy_catalogue_then_failed_move_preserves_data", checkLegacyCatalogueThenFailedMovePreservesData)
         await run("corrupt_queue_move_touches_nothing", checkCorruptQueueMoveTouchesNothing)
         await run("corrupt_queue_pending_move_touches_nothing", checkCorruptQueuePendingMoveTouchesNothing)
-        await run("queue_corrupted_while_running_move_touches_nothing", checkQueueCorruptedWhileRunningMoveTouchesNothing)
+        await run("queue_corrupted_while_running_move_touches_nothing") { try await checkQueueCorruptedWhileRunningMoveTouchesNothing() }
+        await run("write_failed_then_corrupt_queue_move_touches_nothing") { try await checkQueueCorruptedWhileRunningMoveTouchesNothing(afterWriteFailure: true) }
 
         let failed = results.filter { !$0.failures.isEmpty }
         for result in results {
@@ -122,6 +124,57 @@ struct MediaFolderMoveSafetyCheck {
         expect(!env.journalExists, "当场清干净后不留搬移记录")
     }
 
+    /// 旧条目先补字幕登记，再搬移失败：升级只增加登记字段，恢复基准是实际搬移前的队列。
+    private static func checkLegacyCatalogueThenFailedMovePreservesData() async throws {
+        let env = try makeEnv()
+        defer { env.cleanUp() }
+        var legacy = try seedLibrary(env).items
+        for index in legacy.indices { legacy[index].knownSubtitlePaths = nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let legacyData = try encoder.encode(legacy)
+        try legacyData.write(to: env.dataFile)
+        let sourceBefore = try snapshot(env.source)
+        var mover = MediaLibraryMover(defaults: env.defaults)
+        mover.copyItem = corruptingSecondCopy()
+        let configured = mover
+        let (result, beforeMove) = try await MainActor.run { () throws -> (MediaLibraryMoveResult, Data) in
+            let store = QueueStore(dataFile: env.dataFile, mediaFolder: env.source, defaults: env.defaults)
+            expect(store.flushPendingSaves(), "旧队列补登记须真正落盘")
+            let beforeMove = try Data(contentsOf: env.dataFile)
+            return (store.moveMediaFolder(to: env.destination, mover: configured), beforeMove)
+        }
+        guard case .failure = result else {
+            expect(false, "旧队列搬移核对失败须拒绝，实际 \(result)")
+            return
+        }
+        let oldRows = try JSONSerialization.jsonObject(with: legacyData) as! [[String: Any]]
+        let rows = try JSONSerialization.jsonObject(with: beforeMove) as! [[String: Any]]
+        expect(rows.count == oldRows.count, "旧队列补登记不得改变条目数")
+        for (old, row) in zip(oldRows, rows) {
+            var existingFields = row
+            existingFields.removeValue(forKey: "knownSubtitlePaths")
+            expect(NSDictionary(dictionary: existingFields).isEqual(to: old), "旧队列只允许增加字幕登记，既有字段与顺序须保持")
+            let subtitle = old["subtitleFilePath"] as! String
+            let registered = (row["knownSubtitlePaths"] as? [String])?.map {
+                URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
+            }
+            let original = URL(fileURLWithPath: subtitle).resolvingSymlinksInPath().standardizedFileURL.path
+            expect(registered == [original], "登记须指向原有字幕文件，实际 \(registered ?? [])，原文件 \(original)")
+        }
+        let upgradeFiles = try FileManager.default.contentsOfDirectory(atPath: env.support.path)
+            .filter { $0.hasPrefix(QueueUpgradeBackup.filePrefix) }
+        expect(upgradeFiles.count == 1, "旧队列升级须留一份完整原件备份")
+        for name in upgradeFiles {
+            expect(try Data(contentsOf: env.support.appendingPathComponent(name)) == legacyData, "升级前备份必须逐字节等于原队列")
+        }
+        expect(try Data(contentsOf: env.dataFile) == beforeMove, "失败后队列必须逐字节等于实际搬移前队列")
+        expect(try snapshot(env.source) == sourceBefore, "旧队列搬移失败不得改变原片库")
+        expect(env.preference == nil && !env.journalExists, "失败后偏好不改，搬移记录清理")
+        expect(!FileManager.default.fileExists(atPath: env.destination.path), "失败后不得残留新片库")
+    }
+
     /// 中断点 3：queue.json 已改写成新路径、偏好还没写时进程退出。
     private static func checkInterruptDuringQueueRewrite() async throws {
         let env = try makeEnv()
@@ -177,7 +230,7 @@ struct MediaFolderMoveSafetyCheck {
 
     /// 应用启动时 queue.json 还好好的，运行中途被改坏，这时用户点「更改…」：
     /// 不得先把内存里的旧队列写回去再搬，必须按当前磁盘上的文件判断，任何文件都不动。
-    private static func checkQueueCorruptedWhileRunningMoveTouchesNothing() async throws {
+    private static func checkQueueCorruptedWhileRunningMoveTouchesNothing(afterWriteFailure: Bool = false) async throws {
         let env = try makeEnv()
         defer { env.cleanUp() }
         _ = try seedLibrary(env)
@@ -187,6 +240,15 @@ struct MediaFolderMoveSafetyCheck {
         let loaded = await MainActor.run { store.items.count }
         expect(loaded == 3, "启动时队列应能正常读出 3 条，实际 \(loaded)")
 
+        if afterWriteFailure {
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: env.support.path)
+            let saved = await MainActor.run { () -> Bool in
+                store.rename(store.items[0].id, to: "写入失败保留的改名")
+                return store.flushPendingSaves()
+            }
+            expect(!saved, "确认实际写盘失败，队列仍有待保存内容")
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: env.support.path)
+        }
         let corrupt = Data("{ 运行中被改坏".utf8)
         try corrupt.write(to: env.dataFile)
         let before = try snapshot(env.source)
@@ -403,11 +465,12 @@ struct MediaFolderMoveSafetyCheck {
                 )
             )
         }
-        // 按当前格式写（带原标题）。旧格式的 queue.json 一读进来就会补上原标题、按新格式存回，
-        // 那是标题迁移的事，由 tools/title_migration_check.swift 管；这里只看搬移前后字节一致。
+        // 当前格式样本包含原标题与已登记字幕。旧条目启动补字段另有用例，
+        // 搬移恢复的字节基准不能取升级之前的样本。
         items = items.map { item in
             var current = item
             current.originalTitle = item.title
+            current.knownSubtitlePaths = [item.subtitleFilePath].compactMap { $0 }
             return current
         }
         let nested = env.source.appendingPathComponent("notes/readme.txt")

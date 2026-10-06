@@ -71,11 +71,20 @@ struct DigestTOCBanner: View {
                     .font(.system(size: DigestCueDisplay.originalSize).monospacedDigit())
                     .foregroundStyle(isCurrent ? OpenMyChrome.ink : OpenMyChrome.muted)
                     .frame(width: timeColumnWidth, alignment: .trailing)
-                Text(chapter.title)
-                    .font(.system(size: DigestCueDisplay.translationSize, weight: isCurrent ? .semibold : .medium))
-                    .foregroundStyle(OpenMyChrome.ink)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(chapter.title)
+                        .font(.system(size: DigestCueDisplay.translationSize, weight: isCurrent ? .semibold : .medium))
+                        .foregroundStyle(OpenMyChrome.ink)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let summary = chapter.summary, !summary.isEmpty {
+                        Text(summary)
+                            .font(.system(size: 11))
+                            .foregroundStyle(OpenMyChrome.muted)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())

@@ -233,33 +233,52 @@ final class WindowMinSizeGuard: NSObject, NSWindowDelegate {
 
 struct WindowStyleConfigurator: NSViewRepresentable {
     let title: String
+    /// 列表视图和看板视图的工具栏不同，切换后 AppKit 会重新摆红绿灯；值一变就重新对齐。
+    var layoutKey = ""
 
     final class Coordinator {
-        private let trafficLightVerticalOffset: CGFloat = 8
         private let sidebarToggleVerticalOffset: CGFloat = 4
         weak var alignedWindow: NSWindow?
+        var alignedLayoutKey: String?
         let activationClickShield = ForegroundActivationClickShield()
         let windowFocusController = PlaybackWindowFocusController()
         let minSizeGuard = WindowMinSizeGuard()
         private var resizeObserver: NSObjectProtocol?
 
         func centerTrafficLights(in window: NSWindow) {
-            guard alignedWindow !== window else { return }
-            alignedWindow = window
-
             // The app extends its 56-point pane headers through the native
             // title-bar region. AppKit positions the traffic lights for its
-            // shorter default title bar, so lower the cluster to the visual
-            // center shared by the URL field and the adjacent pane headers.
+            // shorter default title bar, and repositions them again whenever
+            // the toolbar changes (switching between list and board view).
+            // Place the cluster at an absolute height, centered in the
+            // 56-point header, so repeated passes never accumulate.
             for buttonType in [
                 NSWindow.ButtonType.closeButton,
                 .miniaturizeButton,
                 .zoomButton
             ] {
-                guard let button = window.standardWindowButton(buttonType) else { continue }
-                var frame = button.frame
-                frame.origin.y -= trafficLightVerticalOffset
-                button.setFrameOrigin(frame.origin)
+                guard let button = window.standardWindowButton(buttonType),
+                      let container = button.superview else { continue }
+                let rectInWindow = button.convert(button.bounds, to: nil)
+                let currentTop = window.frame.height - rectInWindow.maxY
+                let targetTop = (OpenMyChrome.paneHeaderHeight - rectInWindow.height) / 2
+                let delta = currentTop - targetTop
+                guard abs(delta) > 0.25 else { continue }
+                var origin = button.frame.origin
+                origin.y += container.isFlipped ? -delta : delta
+                button.setFrameOrigin(origin)
+            }
+        }
+
+        func scheduleTrafficLightCentering(in window: NSWindow, layoutKey: String) {
+            guard alignedWindow !== window || alignedLayoutKey != layoutKey else { return }
+            alignedWindow = window
+            alignedLayoutKey = layoutKey
+            for delay in [0.0, 0.05, 0.15, 0.3, 0.75] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak window] in
+                    guard let window else { return }
+                    self.centerTrafficLights(in: window)
+                }
             }
         }
 
@@ -367,7 +386,7 @@ struct WindowStyleConfigurator: NSViewRepresentable {
         // The standard title bar remains available for moving the window.
         window.isMovableByWindowBackground = false
         OpenMyChrome.applyWindowChrome(window)
-        coordinator.centerTrafficLights(in: window)
+        coordinator.scheduleTrafficLightCentering(in: window, layoutKey: layoutKey)
         coordinator.scheduleSidebarToggleAlignment(in: window)
         coordinator.activationClickShield.attach(to: window)
         coordinator.windowFocusController.attach(to: window)

@@ -82,6 +82,7 @@ struct DownloadEngineProgressCheck {
                 fail("引擎没有成功结束：\(String(describing: outcome))")
             }
             expect(fileManager.fileExists(atPath: downloaded.fileURL.path), "引擎报告的文件不存在")
+            expect(downloaded.subtitleFileURLs.count == 4, "下载结束必须回报全部字幕轨，不能只报选中的一条")
         } catch {
             fail("准备假工具失败 \(error)")
         }
@@ -111,6 +112,10 @@ struct DownloadEngineProgressCheck {
         let rows = samples.map { "\($0.percent)|\($0.speed)|\($0.eta)" }.joined(separator: "\n")
         return """
         #!/bin/bash
+        # 预览源解析与下载并行；假工具只为真实下载记参数，不能让预览查询覆盖检查记录。
+        is_download=0
+        for argument in "$@"; do if [[ "$argument" == --paths ]]; then is_download=1; fi; done
+        if [[ "$is_download" == 0 ]]; then exit 1; fi
         args_file='\(argsFile)'
         : > "$args_file"
         has_print=0; has_progress=0; template=""; paths="."; output=""
@@ -141,6 +146,10 @@ struct DownloadEngineProgressCheck {
         fi
         file="$paths/${output//'%(ext)s'/mp4}"
         printf 'fake' > "$file"
+        stem="${output%%.*}"
+        for language in en en-orig zh-Hans-en zh-Hant-en; do
+          printf '1\\n00:00:00,000 --> 00:00:02,000\\nWelcome.\\n' > "$paths/$stem.$language.srt"
+        done
         printf 'WL_DONE\\t"%s"\\t"Fake"\\t"Fake"\\t60\\tnull\\n' "$file"
         exit 0
 

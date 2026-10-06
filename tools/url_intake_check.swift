@@ -13,11 +13,14 @@ struct URLIntakeCheck {
         """
 
         let extracted = URLIntake.webURLs(from: block).map(\.absoluteString)
-        precondition(extracted == [
+        precondition(Array(extracted.prefix(2)) == [
             "https://www.youtube.com/watch?v=abc123",
-            "https://x.com/example/status/987654321",
-            "http://www.example.com/watch/list"
+            "https://x.com/example/status/987654321"
         ], "Unexpected extraction: \(extracted)")
+        // 无协议网址由系统检测器补协议，不同系统可补 http 或 https。
+        precondition(extracted.count == 3)
+        let inferred = URL(string: extracted[2])!
+        precondition(["http", "https"].contains(inferred.scheme ?? "") && inferred.host == "www.example.com" && inferred.path == "/watch/list")
 
         let markdown = "[One](https://example.com/one), [Two](https://example.com/two)."
         let markdownLinks = URLIntake.webURLs(from: markdown).map(\.absoluteString)

@@ -54,12 +54,46 @@ enum AgentLinkPeerPolicy {
     }
 }
 
+/// 工具参数原样转过来的 JSON 对象；校验在应用端做。
+struct AgentLinkArguments: Equatable {
+    static let empty = AgentLinkArguments([:])
+
+    let values: [String: Any]
+
+    init(_ values: [String: Any]) {
+        self.values = values
+    }
+
+    subscript(key: String) -> Any? { values[key] }
+
+    static func == (lhs: AgentLinkArguments, rhs: AgentLinkArguments) -> Bool {
+        NSDictionary(dictionary: lhs.values).isEqual(to: rhs.values)
+    }
+}
+
 /// 套接字请求：一行 JSON。`token` 为 nil 时由客户端现读令牌文件。
 struct AgentLinkRequest: Equatable {
     enum Query: String {
         case nowPlaying = "now_playing"
         case subtitles
         case frame
+        case listQueue = "list_queue"
+        case moveItems = "move_items"
+        case addLinks = "add_links"
+        case searchSubtitles = "search_subtitles"
+        case seekTo = "seek_to"
+        case writeChapters = "write_chapters"
+        case readSubtitles = "read_subtitles"
+        case writeSubtitleTranslations = "write_subtitle_translations"
+        case restoreInitialTranslation = "restore_initial_translation"
+
+        /// 待播清单的七个查询；其余三个是正在播放的查询。
+        var isQueueQuery: Bool {
+            switch self {
+            case .nowPlaying, .subtitles, .frame: return false
+            default: return true
+            }
+        }
     }
 
     var token: String?
@@ -67,6 +101,7 @@ struct AgentLinkRequest: Equatable {
     var before: Double
     var after: Double
     var maxWidth: Double
+    var arguments: AgentLinkArguments = .empty
 
     enum ParseOutcome: Equatable {
         case request(AgentLinkRequest)
@@ -75,13 +110,16 @@ struct AgentLinkRequest: Equatable {
     }
 
     func jsonLine(token resolvedToken: String) -> Data {
-        let object: [String: Any] = [
+        var object: [String: Any] = [
             "token": resolvedToken,
             "query": query.rawValue,
             "before": before,
             "after": after,
             "maxWidth": maxWidth
         ]
+        if !arguments.values.isEmpty {
+            object["arguments"] = arguments.values
+        }
         var data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
         data.append(0x0A)
         return data
@@ -101,12 +139,18 @@ struct AgentLinkRequest: Equatable {
         func number(_ key: String) -> Double {
             (object[key] as? NSNumber)?.doubleValue ?? .nan
         }
+        var arguments = AgentLinkArguments.empty
+        if let raw = object["arguments"] {
+            guard let values = raw as? [String: Any] else { return .badRequest }
+            arguments = AgentLinkArguments(values)
+        }
         return .request(AgentLinkRequest(
             token: nil,
             query: query,
             before: number("before"),
             after: number("after"),
-            maxWidth: number("maxWidth")
+            maxWidth: number("maxWidth"),
+            arguments: arguments
         ))
     }
 }
@@ -194,16 +238,19 @@ enum AgentLinkSocket {
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
-            if let newline = buffer.firstIndex(of: 0x0A) {
-                let line = buffer[buffer.startIndex..<newline]
-                return line.count > limit ? .tooLarge : .line(Data(line))
-            }
             if buffer.count > limit { return .tooLarge }
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else { return .closedOrTimedOut }
             setTimeout(fd, option: SO_RCVTIMEO, seconds: remaining)
             let count = read(fd, &chunk, chunk.count)
             if count > 0 {
+                // 只检查本次到达的数据；过去的buffer已确认无换行，不再重复扫描。
+                if let newline = chunk.prefix(count).firstIndex(of: 0x0A) {
+                    guard newline <= limit - buffer.count else { return .tooLarge }
+                    buffer.append(chunk, count: newline)
+                    return .line(buffer)
+                }
+                guard count <= limit - buffer.count else { return .tooLarge }
                 buffer.append(chunk, count: count)
             } else if count < 0, errno == EINTR {
                 continue
@@ -241,7 +288,8 @@ enum AgentLinkSocket {
 
 /// 应用内的本机查询服务：Unix 域套接字，只有当前用户能连，带令牌鉴权，一问一答。
 final class AgentLinkServer {
-    static let maxRequestBytes = 16 * 1024
+    /// 整轨译文可能超过旧 256 KB；仍有固定上限，防止四个连接无限占用内存。
+    static let maxRequestBytes = 32 * 1024 * 1024
     static let maxConnections = 4
     static let readTimeout: TimeInterval = 2
     static let writeTimeout: TimeInterval = 10

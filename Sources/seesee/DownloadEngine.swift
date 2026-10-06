@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 final class DownloadEngine {
@@ -10,6 +11,8 @@ final class DownloadEngine {
         var description: String? = nil
         /// 视频的语言，例如 en。翻译标题时用来判断源语言，可能没有。
         var language: String? = nil
+        var subtitleLanguages: [String] = []
+        var automaticCaptionLanguages: [String] = []
     }
 
     struct Result {
@@ -17,6 +20,7 @@ final class DownloadEngine {
         let thumbnailFileURL: URL?
         let subtitleFileURL: URL?
         let metadata: Metadata
+        var subtitleFileURLs: [URL] = []
     }
 
     enum Event {
@@ -44,6 +48,8 @@ final class DownloadEngine {
     private var processes: [UUID: Process] = [:]
     private var resolverProcesses: [UUID: Process] = [:]
     private let metadataQueue = DispatchQueue(label: "ai.openmy.seesee.metadata", qos: .utility)
+    private let metadataDetailsQueue = DispatchQueue(label: "ai.openmy.seesee.metadata-details", qos: .utility)
+    static let metadataRequestTimeout: TimeInterval = 30
     /// 取作者中文标题单独排队，不和元数据、封面、字幕抢 metadataQueue。
     private let titleQueue = DispatchQueue(label: "ai.openmy.seesee.localized-titles", qos: .utility)
     private let subtitleScanQueue = DispatchQueue(label: "ai.openmy.seesee.subtitle-scan", qos: .utility)
@@ -60,7 +66,7 @@ final class DownloadEngine {
     private static let progressiveFormat = "b[height<=720][ext=mp4][vcodec!=none][acodec!=none][protocol^=http]/b[height<=720][vcodec!=none][acodec!=none]/best"
 
     /// `WL_META` 和 `WL_DONE` 里元数据的各列，用 JSON 写，制表符和换行都被转义，不会打乱按制表符分列。
-    static let metadataFields = "%(title)j\t%(uploader)j\t%(duration)j\t%(chapters)j\t%(description)j\t%(language)j"
+    static let metadataFields = "%(title)j\t%(uploader)j\t%(duration)j\t%(chapters)j\t%(description)j\t%(language)j\t%(subtitles)j\t%(automatic_captions)j"
 
     func start(
         itemID: UUID,
@@ -188,7 +194,8 @@ final class DownloadEngine {
                     fileURL: fileURL,
                     thumbnailFileURL: self.discoverThumbnail(for: itemID, in: destination),
                     subtitleFileURL: self.discoverSubtitle(for: itemID, in: destination),
-                    metadata: latestMetadata
+                    metadata: latestMetadata,
+                    subtitleFileURLs: (try? Self.localSubtitleFiles(for: itemID, in: destination)) ?? []
                 )))
             } catch {
                 self.removeProcess(for: itemID)
@@ -264,7 +271,7 @@ final class DownloadEngine {
         sourceURL: URL,
         completion: @escaping (Swift.Result<Metadata, Error>) -> Void
     ) {
-        metadataQueue.async { [weak self] in
+        metadataDetailsQueue.async { [weak self] in
             guard let self else { return }
             do {
                 let ytDlp = try self.requiredTool(named: "yt-dlp")
@@ -288,8 +295,9 @@ final class DownloadEngine {
                 process.arguments = arguments
 
                 try process.run()
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
+                let deadline = Date().addingTimeInterval(Self.metadataRequestTimeout)
+                defer { Self.stopOwnedMetadataProcess(process) }
+                let data = try Self.readMetadataOutput(process, output: output, deadline: deadline)
                 guard process.terminationStatus == 0 else {
                     throw EngineError.failed("无法刷新视频的章节信息。")
                 }
@@ -302,7 +310,9 @@ final class DownloadEngine {
                 )
                 var finishedFile: URL?
                 var recentLines: [String] = []
+                var receivedMetadata = false
                 for line in String(decoding: data, as: UTF8.self).components(separatedBy: .newlines) {
+                    if line.hasPrefix("WL_META\t") { receivedMetadata = true }
                     self.parse(
                         line: line,
                         metadata: &metadata,
@@ -311,11 +321,70 @@ final class DownloadEngine {
                         onEvent: { _ in }
                     )
                 }
+                guard receivedMetadata else { throw EngineError.failed("视频元数据查询没有返回有效信息，来源暂时不明") }
                 completion(.success(metadata))
             } catch {
                 completion(.failure(error))
             }
         }
+    }
+
+    /// 管道也有截止时间：子进程不退出、提前关stdout、或子孙持有管道，都不能无限等。
+    private static func readMetadataOutput(_ process: Process, output: Pipe, deadline: Date) throws -> Data {
+        let handle = output.fileHandleForReading
+        defer { try? handle.close() }
+        let fd = handle.fileDescriptor
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { throw EngineError.failed("无法读取视频元数据") }
+        var data = Data(), chunk = [UInt8](repeating: 0, count: 64 * 1024)
+        var eof = false
+        while !eof, Date() < deadline {
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN | POLLHUP), revents: 0)
+            let milliseconds = Int32(min(100, max(1, deadline.timeIntervalSinceNow * 1000)))
+            let ready = poll(&descriptor, 1, milliseconds)
+            if ready < 0, errno == EINTR { continue }
+            guard ready >= 0 else { throw EngineError.failed("无法读取视频元数据") }
+            if ready == 0 { continue }
+            while Date() < deadline {
+                let count = read(fd, &chunk, chunk.count)
+                if count > 0 { data.append(chunk, count: count) }
+                else if count == 0 { eof = true; break }
+                else if errno == EINTR { continue }
+                else if errno == EAGAIN || errno == EWOULDBLOCK { break }
+                else { throw EngineError.failed("无法读取视频元数据") }
+            }
+        }
+        while eof, process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        guard eof, !process.isRunning else { throw EngineError.failed("视频元数据查询超时，来源暂时不明") }
+        process.waitUntilExit()
+        return data
+    }
+
+    /// 只处理这次Process返回的PID及其当前子孙，不按名称找或结束别的进程。
+    private static func stopOwnedMetadataProcess(_ process: Process) {
+        guard process.isRunning else { return }
+        let root = process.processIdentifier
+        guard root > 0 else { return }
+        _ = kill(root, SIGSTOP)
+        var owned: [pid_t] = [root]
+        let listing = Process(), pipe = Pipe()
+        listing.executableURL = URL(fileURLWithPath: "/bin/ps")
+        listing.arguments = ["-axo", "pid=,ppid="]; listing.standardOutput = pipe
+        if (try? listing.run()) != nil {
+            let rows = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n").compactMap { line -> (pid_t, pid_t)? in
+                let values = line.split(whereSeparator: { $0.isWhitespace }).compactMap { Int32($0) }
+                return values.count == 2 ? (values[0], values[1]) : nil
+            }
+            listing.waitUntilExit()
+            var index = 0
+            while index < owned.count {
+                owned += rows.filter { $0.1 == owned[index] && !owned.contains($0.0) }.map { $0.0 }
+                index += 1
+            }
+        }
+        for pid in owned { _ = kill(pid, SIGSTOP) }
+        for pid in owned.reversed() { _ = kill(pid, SIGKILL) }
+        process.waitUntilExit()
     }
 
     func fetchThumbnail(
@@ -568,13 +637,21 @@ final class DownloadEngine {
                 : metadata.chapters
             let description: String? = fields.count > offset + 4 ? decodeJSON(fields[offset + 4]) : metadata.description
             let language: String? = fields.count > offset + 5 ? decodeJSON(fields[offset + 5]) : metadata.language
+            func languages(_ index: Int, otherwise: [String]) -> [String] {
+                guard fields.count > index,
+                      let data = fields[index].data(using: .utf8),
+                      let values = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return otherwise }
+                return values.keys.sorted()
+            }
             metadata = Metadata(
                 title: title,
                 author: author,
                 duration: duration,
                 chapters: chapters,
                 description: description,
-                language: language
+                language: language,
+                subtitleLanguages: languages(offset + 6, otherwise: metadata.subtitleLanguages),
+                automaticCaptionLanguages: languages(offset + 7, otherwise: metadata.automaticCaptionLanguages)
             )
             onEvent(.metadata(metadata))
             return
@@ -694,18 +771,26 @@ final class DownloadEngine {
     }
 
     /// 纯本地扫描媒体目录字幕，不起进程、不联网。经 metadataQueue 回调，避免主线程 IO。
+    static func localSubtitleFiles(for itemID: UUID, in folder: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+            .filter { $0.lastPathComponent.hasPrefix(itemID.uuidString + ".") && ["srt", "vtt"].contains($0.pathExtension.lowercased()) }
+            .sorted { $0.path < $1.path }
+    }
+
     func discoverLocalSubtitle(
         itemID: UUID,
         in folder: URL,
+        excluding paths: Set<String> = [],
+        externalOnly: Bool = false,
         completion: @escaping (URL?) -> Void
     ) {
         metadataQueue.async { [weak self] in
             guard let self else { return }
-            completion(self.discoverSubtitle(for: itemID, in: folder))
+            completion(self.discoverSubtitle(for: itemID, in: folder, excluding: paths, externalOnly: externalOnly))
         }
     }
 
-    private func discoverSubtitle(for itemID: UUID, in folder: URL) -> URL? {
+    private func discoverSubtitle(for itemID: UUID, in folder: URL, excluding paths: Set<String> = [], externalOnly: Bool = false) -> URL? {
         let prefix = itemID.uuidString + "."
         let supported = Set(["srt", "vtt"])
         let files = (try? FileManager.default.contentsOfDirectory(
@@ -715,7 +800,9 @@ final class DownloadEngine {
         )) ?? []
         return files
             .filter {
-                $0.lastPathComponent.hasPrefix(prefix) && supported.contains($0.pathExtension.lowercased())
+                guard $0.lastPathComponent.hasPrefix(prefix), supported.contains($0.pathExtension.lowercased()), !paths.contains($0.path) else { return false }
+                let suffix = String($0.deletingPathExtension().lastPathComponent.dropFirst(prefix.count))
+                return !externalOnly || !["agent-", "original-", "initial-", "initial-display-"].contains(where: { suffix.hasPrefix($0) })
             }
             .sorted { lhs, rhs in
                 let leftRank = SubtitleTrackRank.value(for: lhs)

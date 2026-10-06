@@ -15,6 +15,7 @@ struct KeyboardRoutingCheck {
         assertLeftoverTextDoesNotBlockShortcuts()
         assertModifierCombinations()
         assertMissingPlayer()
+        assertEscapeExitsWindowFullscreenBeforePanel()
         assertWindowFocusControllerClearsInitialResponder()
         assertEscapeResignCarriesReason()
         assertEscapeThenClickOtherFieldCommitsTitle()
@@ -552,6 +553,39 @@ struct KeyboardRoutingCheck {
             route(keyCode: 123, modifiers: .shift, hasActivePlayer: true) == .passThrough,
             "Shift-左方向键不得快退"
         )
+    }
+
+    /// 下载失败的条目没有播放器：窗口在系统全屏时 Esc 先退全屏，面板不动；不在全屏才收起面板。
+    private static func assertEscapeExitsWindowFullscreenBeforePanel() {
+        func press(player: Bool, fullscreen: Bool, panelOpen: Bool) -> (PlaybackEscape.Outcome, exited: Bool, collapsed: Bool) {
+            var exited = false
+            var collapsed = false
+            let outcome = PlaybackEscape.handle(
+                playerExitedFullscreen: { player },
+                windowIsFullscreen: { fullscreen },
+                exitWindowFullscreen: { exited = true },
+                collapseBoardPanel: {
+                    collapsed = panelOpen
+                    return panelOpen
+                }
+            )
+            return (outcome, exited, collapsed)
+        }
+
+        let failedItemInFullscreen = press(player: false, fullscreen: true, panelOpen: true)
+        precondition(failedItemInFullscreen.0 == .windowFullscreen, "没有播放器、窗口在系统全屏时 Esc 先退全屏")
+        precondition(failedItemInFullscreen.exited, "没有播放器时要由窗口自己退出系统全屏")
+        precondition(!failedItemInFullscreen.collapsed, "退全屏的这一下不能同时收起面板")
+
+        let playerInFullscreen = press(player: true, fullscreen: true, panelOpen: true)
+        precondition(playerInFullscreen.0 == .player, "能播放的视频照旧由播放器退全屏")
+        precondition(!playerInFullscreen.exited && !playerInFullscreen.collapsed, "播放器处理了就不再动窗口和面板")
+
+        let notFullscreen = press(player: false, fullscreen: false, panelOpen: true)
+        precondition(notFullscreen.0 == .boardPanel && !notFullscreen.exited, "不在全屏时 Esc 收起面板")
+
+        let nothingOpen = press(player: false, fullscreen: false, panelOpen: false)
+        precondition(nothingOpen.0 == .unhandled, "不在全屏、面板没开时 Esc 放行")
     }
 
     private static func assertMissingPlayer() {

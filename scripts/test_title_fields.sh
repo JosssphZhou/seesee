@@ -46,7 +46,7 @@ for name in WatchItem ChapterMetadata VideoSubtitles SubtitleTrackRank NetworkMo
     AppFolders QueueRowMeta URLIntake DownloadRetryPolicy ChannelLink PlaylistListing ChannelSubscription \
     DownloadEngine ChannelWatchStore MediaFolderCopy MediaFolderAvailability MediaFolderPreference \
     MediaFolderLaunchArguments MediaLibraryMover PlayerReadyDecision QueueStore \
-    SponsorSkip VideoTitle TitleTranslation; do
+    SponsorSkip VideoTitle TitleTranslation SubtitleVersionStore SubtitleSentenceBlocks LocalTranscription AppleSpeechModelBackend TranscriptionModelStatus; do
     if [[ -f "$source_dir/$name.swift" ]]; then
         store_sources+=("$source_dir/$name.swift")
     fi

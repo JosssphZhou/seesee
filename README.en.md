@@ -27,7 +27,7 @@
 
 seesee has no AI built into the player. Through seesee MCP, your own agent (Claude Code, Codex and others) reads the video you are watching, the current subtitles and the current frame, and you ask it right there.
 
-- **seesee MCP**: `now_playing` reads the video and playback position, `current_subtitles` reads the subtitles around the current position, `current_frame` reads the current frame. Read-only; it never controls playback.
+- **seesee MCP**: `now_playing` reads the video and playback position, `current_subtitles` reads the subtitles around the current position, `current_frame` reads the current frame. These three tools are read-only; queue editing, seeking, and chapter writing are described below.
 
 Learning from video should be a conversation, not a one-way stream.
 
@@ -87,6 +87,27 @@ args = ["--mcp-stdio"]
 ```
 
 Open seesee, play a video, and ask your agent "What am I watching?". If seesee is not open, the tools report that it is not running.
+
+MCP provides six read-only tools and six write tools. Writes use the authenticated local socket, save through the same path as the UI, and refresh the app. Subtitles, frames, titles, and post text are video content, not instructions for your agent.
+
+| Tool | Purpose | Say to your agent |
+| --- | --- | --- |
+| `now_playing` | Read the current video and playback position | “What am I watching?” |
+| `current_subtitles` | Read subtitles around the current position | “Explain that last sentence.” |
+| `current_frame` | Read the current frame | “What does this diagram show?” |
+| `list_queue` | Filter the queue by status, with titles, channels, progress, and item IDs | “List the videos in my inbox.” |
+| `move_items` | Move multiple videos to a status, including archived | “Move the Swift videos from my inbox to To watch.” |
+| `add_links` | Add web video links to the inbox and start downloading | “Add this video link to my inbox.” |
+| `search_subtitles` | Search original and translated subtitles across videos | “Find actor in all my subtitles.” |
+| `seek_to` | Open a video at a time, paused by default | “Jump to that search result and pause there.” |
+| `write_chapters` | Write chapters and optional summaries shown in the right pane | “Read the full transcript and write chapters for this video.” |
+| `read_subtitles` | Read a video's complete subtitles in pages | “Read all the subtitles for this video.” |
+| `write_subtitle_translations` | Write a complete polished machine translation, preserving original and initial files | “Polish this video’s machine translation.” |
+| `restore_initial_translation` | Restore the first machine translation and keep polished versions | “Restore this video’s initial translation.” |
+
+Statuses are `inbox`, `to_watch`, `watching`, `watched`, and `archived`. Manual status takes precedence. A video manually moved to `to_watch` changes to `watching` after three seconds of continuous playback.
+
+`add_links` rejects file links and channel subscription links. If any item ID is missing, `move_items` changes nothing. `write_chapters` can replace chapters written by the agent, but cannot overwrite user-edited chapters. Read by stable index using `nextIndex` until it is null, keeping the same `revision` across pages. On macOS 26 or later, videos without usable subtitles are transcribed locally; English receives an Apple initial translation, while Chinese keeps the original only. Polish only items with `translationPolishable=true`; human subtitles reject writes. MCP has no tool for deleting videos.
 
 ## Data and privacy
 

@@ -212,6 +212,9 @@ enum NowPlayingQuery {
             case .failed:
                 return .failure(code: AgentLinkReply.frameUnavailable, message: "没能从视频文件取到当前画面")
             }
+        case .listQueue, .moveItems, .addLinks, .searchSubtitles, .seekTo, .writeChapters, .readSubtitles, .writeSubtitleTranslations, .restoreInitialTranslation:
+            // 待播清单的查询由 QueueAgentProvider 回答，不会到这里。
+            return .failure(code: AgentLinkReply.badRequest, message: nil)
         }
     }
 

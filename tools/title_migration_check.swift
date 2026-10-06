@@ -7,7 +7,7 @@ import Foundation
 @main
 @MainActor
 struct TitleMigrationCheck {
-    static let backupPrefix = "queue-标题升级前备份-"
+    static let backupPrefix = QueueUpgradeBackup.filePrefix
 
     static func main() throws {
         let root = FileManager.default.temporaryDirectory
@@ -51,8 +51,11 @@ struct TitleMigrationCheck {
         let original = try JSONSerialization.data(withJSONObject: legacyItems, options: [.prettyPrinted, .sortedKeys])
         try original.write(to: dataFile)
 
-        // 第一次启动：读进来，按新格式存出去。
-        let store = QueueStore(dataFile: dataFile, mediaFolder: mediaFolder)
+        let suite = "seesee.check.title-migration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        // 第一次启动：读进来，按统一格式备份后存出去。
+        let store = QueueStore(dataFile: dataFile, mediaFolder: mediaFolder, defaults: defaults)
         try check(store.items.count == 2, "旧格式的 queue.json 没有全部读进来，读到 \(store.items.count) 条")
         store.flushPendingSaves()
 
@@ -91,7 +94,7 @@ struct TitleMigrationCheck {
         }
 
         // 第二次启动：已经是新格式，不再复制；读回来和存出去的一致。
-        let reopened = QueueStore(dataFile: dataFile, mediaFolder: mediaFolder)
+        let reopened = QueueStore(dataFile: dataFile, mediaFolder: mediaFolder, defaults: defaults)
         reopened.flushPendingSaves()
         try check(try backupFiles(in: root).count == 1, "第二次启动又复制了一份备份")
         try check(

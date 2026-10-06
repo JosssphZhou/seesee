@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Combine
 import Foundation
 import os.log
@@ -11,6 +12,10 @@ private final class QueuePersistenceWriter {
     private let queue = DispatchQueue(label: "ai.openmy.seesee.persistence", qos: .utility)
     private var pendingItems: [WatchItem]?
     private var pendingWork: DispatchWorkItem?
+    private var lastWriteSucceeded = true
+    var onWriteCompleted: (() -> Void)?
+
+    var latestWriteSucceeded: Bool { queue.sync { lastWriteSucceeded } }
 
     init(dataFile: URL) {
         self.dataFile = dataFile
@@ -38,32 +43,49 @@ private final class QueuePersistenceWriter {
         }
     }
 
-    func flush(_ items: [WatchItem]) {
+    func flush(_ items: [WatchItem]) -> Bool {
         queue.sync {
             pendingWork?.cancel()
             pendingWork = nil
             pendingItems = items
-            writePendingItems()
+            return writePendingItems()
         }
     }
 
-    private func writePendingItems() {
-        guard let items = pendingItems else { return }
-        pendingItems = nil
+    @discardableResult
+    private func writePendingItems() -> Bool {
+        guard let items = pendingItems else { return lastWriteSucceeded }
         pendingWork = nil
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(items) else { return }
-        try? data.write(to: dataFile, options: .atomic)
+        do {
+            let data = try encoder.encode(items)
+            try data.write(to: dataFile, options: .atomic)
+            pendingItems = nil
+            lastWriteSucceeded = true
+        } catch {
+            // 原件未动，失败的快照仍保留；下一次保存再试。
+            lastWriteSucceeded = false
+        }
+        onWriteCompleted?()
+        return lastWriteSucceeded
     }
 }
 
 @MainActor
 final class QueueStore: ObservableObject {
-    private enum AddDisposition {
-        case added
-        case existing
+    enum AddDisposition: Equatable {
+        case added(UUID)
+        case existing(UUID)
+    }
+
+    /// agent 经 MCP 发来的跳转：详情视图打开这一条后执行，执行完清掉。
+    struct AgentSeekRequest: Equatable {
+        let id = UUID()
+        let itemID: UUID
+        let seconds: Double
+        let play: Bool
     }
 
     struct IntakeNotice: Identifiable, Equatable {
@@ -78,6 +100,7 @@ final class QueueStore: ObservableObject {
     @Published var lastIntakeError: String?
     @Published private(set) var intakeNotice: IntakeNotice?
     @Published var pendingSubscriptionURL: URL?
+    @Published private(set) var agentSeekRequest: AgentSeekRequest?
     /// 下载中先播的在线预览流，只在内存里，不写进 queue.json。
     /// 重试时沿用；下完、最终失败、删除，或播放器报告预览不可用时清掉。
     @Published private var progressivePlaybackSources: [UUID: VideoPlaybackSource] = [:]
@@ -85,12 +108,25 @@ final class QueueStore: ObservableObject {
     let channelWatch: ChannelWatchStore
     private var watchCancellables = Set<AnyCancellable>()
     private let downloader = DownloadEngine()
-    private let networkMonitor = NetworkMonitor()
+    private let networkMonitor: NetworkMonitor
     private let powerMonitor = PowerModeMonitor()
     private let maximumConcurrentDownloads = 3
     private let dataFile: URL
     private let persistenceWriter: QueuePersistenceWriter
     private var metadataRefreshes: Set<UUID> = []
+    /// 手动挪到待看的条目开始播放时的位置，用来判断「播放满 3 秒」。只在内存里。
+    private var playbackStartPositions: [UUID: Double] = [:]
+    private var localTranscriptionTask: Task<Void, Never>?
+    private var localTranscriptionID: UUID?
+    private var localTranscriptionEnabled = false
+    private var localTranscriptionRetryScheduled = false
+    private var transcriptionModelsObserver: NSObjectProtocol?
+    private var startupTranscriptionRecoveryPending = false
+    private var assetTranscriptionRecoveryPending = false
+    private var loadedTranscriptionItemIDs: Set<UUID> = []
+    private var explicitTranscriptionRetryIDs: Set<UUID> = []
+    private var subtitleMetadata: [UUID: DownloadEngine.Metadata] = [:]
+    private var subtitleMetadataRequests: Set<UUID> = []
     private var thumbnailRefreshes: Set<UUID> = []
     private var subtitleRefreshes: Set<UUID> = []
     private var noticeDismissal: Task<Void, Never>?
@@ -116,18 +152,16 @@ final class QueueStore: ObservableObject {
     private var isMovingMediaFolder = false
     /// queue.json 在但读不出来或解码失败：无法判断，本次运行不写它，也不更改片库位置。
     private var isQueueFileUnreadable = false
-    /// 旧格式 queue.json 的升级前备份没写成时，留着原文件的字节。每次要保存前先重试备份，
-    /// 成功以前不保存、不搬移片库，用户的写操作在改内存之前就拒绝。
-    private var pendingUpgradeBackup: Data?
-    @Published private(set) var upgradeBackupFailed = false
-    static let backupFailureMessage = "无法备份数据，改动不会保存"
-    var queueWriteWarning: String? { upgradeBackupFailed ? Self.backupFailureMessage : nil }
+    /// 升级备份失败时先只读，每次写操作或保存前重试；发布变化以刷新持续横幅。
+    @Published private var isUpgradeBackupReady = true
+    @Published private var isQueueWriteFailed = false
     private let defaults: UserDefaults
     private let resolveMountedVolumes: () -> [URL]
     private let volumesRoot: URL
     private var volumeObservers: [NSObjectProtocol] = []
 
     init() {
+        networkMonitor = NetworkMonitor()
         let fileManager = FileManager.default
         let applicationSupportRoot = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let moviesRoot = fileManager.homeDirectoryForCurrentUser
@@ -150,6 +184,7 @@ final class QueueStore: ObservableObject {
             dataFile: applicationSupport.appendingPathComponent("subscriptions.json"),
             downloader: downloader
         )
+        observePersistenceWrites()
         try? fileManager.createDirectory(at: applicationSupport, withIntermediateDirectories: true)
         refreshMediaFolderConnection()
         createMediaFolderIfConnected()
@@ -174,8 +209,10 @@ final class QueueStore: ObservableObject {
         mediaFolder: URL,
         defaults: UserDefaults = .standard,
         mountedVolumeURLs: [URL]? = nil,
-        volumesRoot: URL = MediaFolderAvailability.defaultVolumesRoot
+        volumesRoot: URL = MediaFolderAvailability.defaultVolumesRoot,
+        networkMonitor: NetworkMonitor? = nil
     ) {
+        self.networkMonitor = networkMonitor ?? NetworkMonitor()
         self.dataFile = dataFile
         self.persistenceWriter = QueuePersistenceWriter(dataFile: dataFile)
         self.defaults = defaults
@@ -195,6 +232,7 @@ final class QueueStore: ObservableObject {
             dataFile: dataFile.deletingLastPathComponent().appendingPathComponent("subscriptions.json"),
             downloader: downloader
         )
+        observePersistenceWrites()
         refreshMediaFolderConnection()
         createMediaFolderIfConnected()
         load()
@@ -209,7 +247,7 @@ final class QueueStore: ObservableObject {
             self?.add(url, showsNotice: false, activatesApp: false, selectsItem: false)
         }
         channelWatch.onPollFinished = { [weak self] count in
-            guard let self, count > 0 else { return }
+            guard let self, count > 0, self.ensureQueueWritable() else { return }
             self.showIntakeNotice(
                 title: "订阅有更新",
                 detail: count == 1 ? "已加入 1 个新视频" : "已加入 \(count) 个新视频",
@@ -233,6 +271,7 @@ final class QueueStore: ObservableObject {
         }
         powerMonitor.start()
         observeVolumeChanges()
+        startLocalTranscriptionQueue()
 
         let resumable = items.filter { $0.state == .queued }.map(\.id)
         let missingChapterMetadata = items.filter { $0.state == .ready && $0.chapters == nil }.map(\.id)
@@ -247,10 +286,12 @@ final class QueueStore: ObservableObject {
         }
     }
 
+    /// 收件箱、待看、观看中。
     var queueItems: [WatchItem] {
         items.filter { !$0.isWatched }
     }
 
+    /// 已看完、已归档：看板做进应用之前都放在「已看」分组。
     var archivedItems: [WatchItem] {
         items
             .filter(\.isWatched)
@@ -302,12 +343,20 @@ final class QueueStore: ObservableObject {
             lastIntakeError = "这段文字里没有找到 HTTP 或 HTTPS 链接。"
             return
         }
-        guard acceptsUserWrite() else { return }
+        guard requireQueueWrite() else { return }
         guard urls.count > 1 else {
             consider(urls[0])
             return
         }
+        addBatch(urls, activatesApp: true)
+    }
 
+    /// 一次加入好几个链接：⌘V 粘贴多个链接和 agent 的 `add_links` 都走这里。
+    /// 逐个加入、统计、弹一次提示；`activatesApp` 为 false 时不把 seesee 拉到前台，也不改当前选中的视频。
+    @discardableResult
+    func addBatch(_ urls: [URL], activatesApp: Bool) -> [AddDisposition] {
+        guard requireQueueWrite() else { return [] }
+        var dispositions: [AddDisposition] = []
         var addedCount = 0
         var existingCount = 0
         var subscribedCount = 0
@@ -316,7 +365,9 @@ final class QueueStore: ObservableObject {
                 if channelWatch.add(url) { subscribedCount += 1 }
                 continue
             }
-            switch add(url, showsNotice: false, activatesApp: false) {
+            guard let disposition = add(url, showsNotice: false, activatesApp: false, selectsItem: activatesApp) else { continue }
+            dispositions.append(disposition)
+            switch disposition {
             case .added: addedCount += 1
             case .existing: existingCount += 1
             }
@@ -362,10 +413,12 @@ final class QueueStore: ObservableObject {
                 systemImage: "checkmark.circle.fill"
             )
         }
-        NSApp.activate(ignoringOtherApps: true)
+        if activatesApp { NSApp.activate(ignoringOtherApps: true) }
+        return dispositions
     }
 
     func confirmPendingSubscription() {
+        guard requireQueueWrite() else { return }
         guard let url = pendingSubscriptionURL else { return }
         pendingSubscriptionURL = nil
         if channelWatch.add(url) {
@@ -389,11 +442,12 @@ final class QueueStore: ObservableObject {
     }
 
     func removeSubscription(_ id: UUID) {
+        guard requireQueueWrite() else { return }
         channelWatch.remove(id)
     }
 
     private func consider(_ url: URL) {
-        guard acceptsUserWrite() else { return }
+        guard requireQueueWrite() else { return }
         if ChannelLink.isSubscription(url) {
             lastIntakeError = nil
             if channelWatch.contains(url) {
@@ -417,7 +471,8 @@ final class QueueStore: ObservableObject {
         showsNotice: Bool = true,
         activatesApp: Bool = true,
         selectsItem: Bool = true
-    ) -> AddDisposition {
+    ) -> AddDisposition? {
+        guard requireQueueWrite() else { return nil }
         let canonical = URLIntake.canonicalString(for: url)
         if let existing = items.first(where: { $0.urlString == canonical }) {
             if selectsItem { selection = existing.id }
@@ -433,7 +488,7 @@ final class QueueStore: ObservableObject {
                 )
             }
             if activatesApp { NSApp.activate(ignoringOtherApps: true) }
-            return .existing
+            return .existing(existing.id)
         }
 
         let host = url.host?.replacingOccurrences(of: "www.", with: "") ?? "视频"
@@ -453,7 +508,9 @@ final class QueueStore: ObservableObject {
             playbackPosition: nil,
             chapters: nil,
             thumbnailFilePath: nil,
-            subtitleFilePath: nil
+            subtitleFilePath: nil,
+            inInbox: true,
+            hasPlayedThreeSeconds: false
         )
         // 元数据到之前先用网址的主机名占位。每个新条目都带原标题，下次启动就不会被当成旧格式再备份。
         item.originalTitle = host
@@ -480,7 +537,7 @@ final class QueueStore: ObservableObject {
             )
         }
         if activatesApp { NSApp.activate(ignoringOtherApps: true) }
-        return .added
+        return .added(item.id)
     }
 
     func dismissIntakeNotice() {
@@ -490,6 +547,7 @@ final class QueueStore: ObservableObject {
     }
 
     func startDownload(for id: UUID) {
+        guard requireQueueWrite() else { return }
         guard let item = item(with: id), item.state != .downloading else { return }
         retryTasks[id]?.cancel()
         retryTasks[id] = nil
@@ -549,42 +607,84 @@ final class QueueStore: ObservableObject {
         )
     }
 
+    /// 界面「标记已看」和「移回队列」：算手动挪动。
     func toggleWatched(_ id: UUID) {
-        guard acceptsUserWrite() else { return }
+        guard requireQueueWrite() else { return }
         update(id) {
-            $0.watchedAt = $0.isWatched ? nil : Date()
-            if $0.isWatched { $0.playbackPosition = nil }
+            $0.applyManualStatus($0.isWatched ? .toWatch : .watched)
         }
         save()
     }
 
+    /// 播放到结尾：播完是用户自己的动作，算手动挪到已看完；已归档的保持已归档。
     func markWatched(_ id: UUID) {
-        guard ensureUpgradeBackup() else { return }
+        guard requireQueueWrite() else { return }
         update(id) {
-            if $0.watchedAt == nil { $0.watchedAt = Date() }
-            $0.playbackPosition = nil
+            if $0.status == .archived {
+                if $0.watchedAt == nil { $0.watchedAt = Date() }
+                $0.playbackPosition = nil
+            } else {
+                $0.applyManualStatus(.watched)
+            }
         }
         save()
     }
 
-    func updatePlaybackPosition(_ seconds: Double, for id: UUID) {
-        // 备份没成功时续播进度不写，也不提示。
-        guard seconds.isFinite, seconds >= 0, let existing = item(with: id), ensureUpgradeBackup() else { return }
+    /// `whilePlaying` 只在播放器正在播放时的进度回报里为 true；拖进度、点章节这类跳转是 false。
+    func updatePlaybackPosition(_ seconds: Double, for id: UUID, whilePlaying: Bool = false) {
+        guard seconds.isFinite, seconds >= 0, let existing = item(with: id) else { return }
+        // 只读期间不补算播放。恢复后由首次真实播放回报重新建立起点。
+        guard ensureQueueWritable() else {
+            playbackStartPositions[id] = nil
+            return
+        }
         let position = seconds < 3 ? nil : seconds
-        if abs((existing.playbackPosition ?? 0) - (position ?? 0)) < 1 { return }
-        update(id) { $0.playbackPosition = position }
+        let playedThreeSeconds = notePlayback(at: seconds, for: existing, whilePlaying: whilePlaying)
+        if !playedThreeSeconds, abs((existing.playbackPosition ?? 0) - (position ?? 0)) < 1 { return }
+        update(id) {
+            $0.playbackPosition = position
+            if playedThreeSeconds { $0.notePlayedThreeSeconds() }
+        }
         save()
     }
 
-    /// 用户改名只写 `customTitle`，元数据和翻译以后都不会覆盖它。
+    func handlePlaybackEvent(_ event: WatchPlaybackEvent, for id: UUID) {
+        switch event {
+        case .started(let seconds):
+            playbackStartPositions[id] = seconds.isFinite && seconds >= 0 ? seconds : nil
+        case .paused, .seeked:
+            playbackStartPositions[id] = nil
+        }
+    }
+
+    /// 新条目和手动待看均须连续播满三秒。播放起点来自播放器事件，不读取界面快照。
+    private func notePlayback(at seconds: Double, for item: WatchItem, whilePlaying: Bool) -> Bool {
+        let needsProof = item.watchStatus == WatchStatus.toWatch.rawValue || (!item.statusIsManual && item.hasPlayedThreeSeconds == false)
+        guard needsProof, whilePlaying else {
+            playbackStartPositions[item.id] = nil
+            return false
+        }
+        guard let start = playbackStartPositions[item.id] else {
+            playbackStartPositions[item.id] = seconds
+            return false
+        }
+        guard seconds >= start, seconds - start >= 3 else {
+            if seconds < start { playbackStartPositions[item.id] = seconds }
+            return false
+        }
+        playbackStartPositions[item.id] = nil
+        return true
+    }
+
+    /// 用户改名只写 customTitle，下载和翻译不能覆盖。
     func rename(_ id: UUID, to rawTitle: String) {
-        guard var changed = item(with: id), changed.rename(to: rawTitle), acceptsUserWrite() else { return }
+        guard var changed = item(with: id), changed.rename(to: rawTitle), requireQueueWrite() else { return }
         update(id) { $0 = changed }
         save()
     }
 
     func reorderQueueItem(_ draggedID: UUID, relativeTo targetID: UUID, insertAfter: Bool) {
-        guard acceptsUserWrite() else { return }
+        guard requireQueueWrite() else { return }
         var reorderedQueue = queueItems
         guard draggedID != targetID,
               let sourceIndex = reorderedQueue.firstIndex(where: { $0.id == draggedID }),
@@ -667,16 +767,22 @@ final class QueueStore: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.subtitleRefreshes.remove(id)
-                guard case .success(let subtitleURL) = result else { return }
-                self.update(id) { $0.subtitleFilePath = subtitleURL?.path ?? "" }
+                // 下载字幕查询已结束；没有拿到可读字幕时允许无字幕视频进入本机转写。
+                let subtitleURL = try? result.get()
+                let downloadedPaths = (try? DownloadEngine.localSubtitleFiles(for: id, in: self.mediaFolder).map(\.path)) ?? []
+                self.update(id) {
+                    $0.knownSubtitlePaths = Array(Set(($0.knownSubtitlePaths ?? []) + downloadedPaths)).sorted()
+                    if $0.originalSubtitlePath == nil, $0.initialSubtitlePath == nil { $0.subtitleFilePath = subtitleURL?.path ?? "" }
+                }
                 self.save()
+                self.pumpLocalTranscriptions()
             }
         }
     }
 
     /// 播放时重扫本地字幕：发现 agent 后补的高 rank 文件并热切换。
     /// 不 guard subtitleFilePath == nil（该字段无字幕时写 ""，nil 判断永不命中）。
-    /// 扫描结果与现值相同则不写不 save（幂等）。找不到字幕写 ""，严禁回写 nil。
+    /// 已登记轨道不抢活动版本；新增外置字幕按人工登记。无轨且活动文件也不存在时写 ""。
     /// - Parameter completion: 主线程回调扫描后的有效路径（含幂等未变时），供当前界面立即重载字幕。
     func rescanLocalSubtitle(for id: UUID, completion: ((String) -> Void)? = nil) {
         guard let existing = item(with: id) else { return }
@@ -688,24 +794,52 @@ final class QueueStore: ObservableObject {
             completion?(existing.subtitleFilePath ?? "")
             return
         }
-        downloader.discoverLocalSubtitle(itemID: id, in: mediaFolder) { [weak self] subtitleURL in
+        // 老队列没有清单时先登记当时已有的所有轨。断开后重连也先建清单，再认后补字幕。
+        if existing.knownSubtitlePaths == nil {
+            guard let files = try? DownloadEngine.localSubtitleFiles(for: id, in: mediaFolder), ensureQueueWritable() else {
+                completion?(existing.subtitleFilePath ?? ""); return
+            }
+            update(id) { $0.knownSubtitlePaths = files.map(\.path) }
+            save()
+        }
+        let registered = Set((item(with: id)?.knownSubtitlePaths ?? []) + [existing.originalSubtitlePath, existing.initialSubtitlePath, existing.subtitleFilePath].compactMap { $0 })
+        downloader.discoverLocalSubtitle(itemID: id, in: mediaFolder, excluding: registered, externalOnly: true) { [weak self] subtitleURL in
             DispatchQueue.main.async {
                 guard let self else { return }
-                // 与 refreshSubtitle / 下载完成路径一致：找不到写空字符串，不写 nil
-                let newPath = subtitleURL?.path ?? ""
-                if let current = self.item(with: id), current.subtitleFilePath != newPath {
-                    self.update(id) { $0.subtitleFilePath = newPath }
+                guard let current = self.item(with: id) else { return }
+                let newPath = subtitleURL?.path
+                // 扫描期间版本可能被 agent 更新，回调再核对一次登记路径。
+                let protected = (current.knownSubtitlePaths ?? []) + [current.originalSubtitlePath, current.initialSubtitlePath, current.subtitleFilePath].compactMap { $0 }
+                if let newPath, !protected.contains(newPath),
+                   let track = VideoSubtitleTrack(contentsOf: URL(fileURLWithPath: newPath)), self.ensureQueueWritable() {
+                    self.update(id) {
+                        $0.originalSubtitlePath = track.cues.contains { SubtitleVersionStore.split($0).translation != nil } ? newPath : ($0.originalSubtitlePath ?? $0.subtitleFilePath)
+                        $0.initialSubtitlePath = newPath
+                        $0.subtitleFilePath = newPath
+                        $0.translationSource = "author"
+                        $0.initialTranslationSource = "author"
+                        $0.knownSubtitlePaths = Array(Set(($0.knownSubtitlePaths ?? []) + [newPath])).sorted()
+                        $0.subtitleRevision = ($0.subtitleRevision ?? 0) + 1
+                        $0.transcriptionState = "not_needed"
+                        $0.transcriptionError = nil
+                        $0.transcriptionErrorCode = nil
+                    }
+                    self.save()
+                } else if newPath == nil, current.originalSubtitlePath == nil, current.initialSubtitlePath == nil,
+                          current.subtitleFileURL == nil, current.subtitleFilePath != "" {
+                    self.update(id) { $0.subtitleFilePath = "" }
                     self.save()
                 }
                 // 无论是否落盘，都把扫描结果交给 UI，避免依赖 onChange（item 值可能未刷新）
-                completion?(newPath)
+                completion?(self.item(with: id)?.subtitleFilePath ?? "")
             }
         }
     }
 
     func remove(_ id: UUID, deleteMedia: Bool = true) {
-        guard acceptsUserWrite() else { return }
+        guard requireQueueWrite() else { return }
         cancelRecovery(for: id)
+        if localTranscriptionID == id { localTranscriptionTask?.cancel() }
         progressivePlaybackSources.removeValue(forKey: id)
         downloader.cancel(itemID: id)
         if deleteMedia {
@@ -760,10 +894,6 @@ final class QueueStore: ObservableObject {
         guard !isMovingMediaFolder else {
             return .failure("正在搬移视频")
         }
-        guard ensureUpgradeBackup() else {
-            mediaFolderMoveMessage = Self.backupFailureMessage
-            return .failure(Self.backupFailureMessage)
-        }
         // 按磁盘上当前的 queue.json 判断，不信启动时读的结果：运行中被改坏时，
         // 先 flush 会拿内存里的旧队列把它覆盖掉，之后的搬移就看不出它坏过。
         guard !isQueueFileUnreadable, queueFileDecodesOnDisk() else {
@@ -775,12 +905,22 @@ final class QueueStore: ObservableObject {
             MediaFolderLog.error("move refused: queue.json unreadable on disk")
             return .failure(MediaFolderCopy.queueUnreadable)
         }
+        guard ensureQueueWritable() else {
+            let message = queueWriteWarning ?? MediaFolderCopy.queueUnreadable
+            mediaFolderMoveMessage = message
+            return .failure(message)
+        }
+        localTranscriptionTask?.cancel()
         isMovingMediaFolder = true
         mediaFolderMoveMessage = nil
         mediaFolderMoveProgress = nil
         defer { isMovingMediaFolder = false }
 
-        flushPendingSaves()
+        guard flushPendingSaves() else {
+            let message = queueWriteWarning ?? MediaFolderCopy.queueUnreadable
+            mediaFolderMoveMessage = message
+            return .failure(message)
+        }
         let previous = mediaFolder
         let used = mover ?? MediaLibraryMover(
             defaults: defaults,
@@ -1045,7 +1185,7 @@ final class QueueStore: ObservableObject {
     /// YouTube 视频开始下载时顺便问作者有没有中文标题。几条一起加进来时凑成一批，只启动一次 yt-dlp。
     private func requestLocalizedTitle(for id: UUID) {
         guard !localizedTitleRequestedIDs.contains(id),
-              let item = item(with: id), item.translationSource != .author,
+              let item = item(with: id), item.titleTranslationSource != .author,
               let videoID = YouTubeVideoID.extract(from: item.urlString) else { return }
         localizedTitleRequestedIDs.insert(id)
         localizedTitleBatch[id] = videoID
@@ -1087,7 +1227,7 @@ final class QueueStore: ObservableObject {
             return false
         }
         localizedTitleCandidates[id] = nil
-        if item.translatedTitle != localized || item.translationSource != .author {
+        if item.translatedTitle != localized || item.titleTranslationSource != .author {
             update(id) { $0.setTranslatedTitle(localized, source: .author) }
             save()
         }
@@ -1097,6 +1237,7 @@ final class QueueStore: ObservableObject {
     private func handle(_ event: DownloadEngine.Event, for id: UUID) {
         switch event {
         case .metadata(let metadata):
+            subtitleMetadata[id] = metadata
             update(id) {
                 $0.applyMetadataTitle(title: metadata.title, postText: metadata.description, author: metadata.author)
                 $0.author = metadata.author
@@ -1123,7 +1264,9 @@ final class QueueStore: ObservableObject {
                    id.uuidString, Self.formatDescription(of: source.videoURL))
         case .subtitleFile(let url):
             guard item(with: id) != nil else { return }
-            update(id) { $0.subtitleFilePath = url.path }
+            update(id) {
+                if $0.originalSubtitlePath == nil, $0.initialSubtitlePath == nil { $0.subtitleFilePath = url.path }
+            }
             save()
         }
     }
@@ -1139,6 +1282,7 @@ final class QueueStore: ObservableObject {
         defer { startWaitingDownloadsIfPossible() }
         switch result {
         case .success(let downloaded):
+            subtitleMetadata[id] = downloaded.metadata
             cancelRecovery(for: id)
             // 和下面的 .ready 在同一次更新里清掉预览：正在看的话，播放器在同一个 AVPlayer 上换成本地文件。
             let hadPreview = progressivePlaybackSources.removeValue(forKey: id) != nil
@@ -1154,8 +1298,11 @@ final class QueueStore: ObservableObject {
                 $0.duration = downloaded.metadata.duration
                 $0.chapters = downloaded.metadata.chapters
                 $0.localFilePath = downloaded.fileURL.path
+                $0.knownSubtitlePaths = Array(Set(($0.knownSubtitlePaths ?? []) + downloaded.subtitleFileURLs.map(\.path))).sorted()
                 $0.thumbnailFilePath = downloaded.thumbnailFileURL?.path ?? ""
-                $0.subtitleFilePath = downloaded.subtitleFileURL?.path ?? ""
+                if $0.originalSubtitlePath == nil, $0.initialSubtitlePath == nil {
+                    $0.subtitleFilePath = downloaded.subtitleFileURL?.path ?? ""
+                }
                 $0.state = .ready
                 $0.progress = 1
                 $0.progressLabel = "已下载"
@@ -1163,6 +1310,7 @@ final class QueueStore: ObservableObject {
             }
             save()
             originalTitleArrived(for: id, languageHint: downloaded.metadata.language)
+            pumpLocalTranscriptions()
         case .failure(let error):
             if powerCancellationIDs.remove(id) != nil {
                 if powerMonitor.isLowPowerModeEnabled {
@@ -1391,11 +1539,366 @@ final class QueueStore: ObservableObject {
         }
     }
 
-    private func item(with id: UUID) -> WatchItem? {
+    // MARK: - 本机转写串行队列
+
+    func startLocalTranscriptionQueue() {
+        guard !localTranscriptionEnabled else { return }
+        localTranscriptionEnabled = true
+        startupTranscriptionRecoveryPending = true
+        pumpLocalTranscriptions()
+    }
+
+    /// 退出时保留已落盘的 transcribing/translating，下次 load 重新排队。
+    func stopLocalTranscriptionQueue() {
+        localTranscriptionEnabled = false
+        localTranscriptionTask?.cancel()
+    }
+
+    func retryLocalTranscription(for id: UUID) {
+        guard item(with: id)?.state == .ready, requireQueueWrite() else { return }
+        explicitTranscriptionRetryIDs.insert(id)
+        update(id) {
+            $0.transcriptionState = "queued"; $0.transcriptionError = nil; $0.transcriptionErrorCode = nil
+            $0.transcriptionAutomaticRetryCount = 0
+        }
+        save()
+        pumpLocalTranscriptions()
+    }
+
+    /// 兼容已发布字段缺错误码的失败；资源缺失不消耗其他故障的三次自动重试额度。
+    private func transcriptionFailureCode(_ item: WatchItem) -> String {
+        if let code = item.transcriptionErrorCode { return code }
+        if item.transcriptionError?.contains("请先在设置页下载中英文语音模型") == true { return "speech_assets_missing" }
+        if item.transcriptionError?.contains("本机翻译语言包未安装") == true { return "translation_assets_missing" }
+        return "processing_failed"
+    }
+
+    private func recoverPendingTranscriptions() -> Bool {
+        guard startupTranscriptionRecoveryPending || assetTranscriptionRecoveryPending else { return true }
+        guard ensureQueueWritable() else { return false }
+        var changed = false
+        for item in items where item.transcriptionState == "failed" {
+            guard !item.isWatched || explicitTranscriptionRetryIDs.contains(item.id) else { continue }
+            let resourceFailure = ["speech_assets_missing", "translation_assets_missing"].contains(transcriptionFailureCode(item))
+            let retries = max(0, item.transcriptionAutomaticRetryCount ?? 0)
+            guard resourceFailure || (startupTranscriptionRecoveryPending && retries < 3) else { continue }
+            update(item.id) {
+                $0.transcriptionState = "queued"; $0.transcriptionError = nil; $0.transcriptionErrorCode = nil
+                if !resourceFailure { $0.transcriptionAutomaticRetryCount = retries + 1 }
+            }
+            changed = true
+        }
+        startupTranscriptionRecoveryPending = false
+        assetTranscriptionRecoveryPending = false
+        return !changed || flushPendingSaves()
+    }
+
+    private func pumpLocalTranscriptions() {
+        guard localTranscriptionEnabled, localTranscriptionTask == nil,
+              !isMovingMediaFolder, !isMediaFolderDisconnected else { return }
+        guard ensureQueueWritable() else {
+            guard !localTranscriptionRetryScheduled else { return }
+            localTranscriptionRetryScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.localTranscriptionRetryScheduled = false
+                self?.pumpLocalTranscriptions()
+            }
+            return
+        }
+        guard recoverPendingTranscriptions() else { pumpLocalTranscriptions(); return }
+        let candidates = items.filter {
+            $0.state == .ready && $0.localFileURL != nil && $0.subtitleFilePath != nil &&
+            (!$0.isWatched || explicitTranscriptionRetryIDs.contains($0.id)) &&
+            !(subtitleMetadataRequests.contains($0.id) && subtitleMetadata[$0.id] == nil) &&
+            ($0.transcriptionState == nil || ["queued", "transcribing", "translating"].contains($0.transcriptionState ?? ""))
+        }.sorted {
+            let leftNew = !loadedTranscriptionItemIDs.contains($0.id), rightNew = !loadedTranscriptionItemIDs.contains($1.id)
+            if leftNew != rightNew { return leftNew }
+            if $0.addedAt != $1.addedAt { return $0.addedAt > $1.addedAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        guard let candidate = candidates.first, let movie = candidate.localFileURL else { return }
+        let id = candidate.id
+        // 初译已完成的版本，以及本来就有的可读字幕，不再转写。
+        let resumesTranslation = candidate.originalSubtitlePath != nil && candidate.initialSubtitlePath == nil && candidate.transcriptionLanguage == "en"
+        if !resumesTranslation, let path = candidate.subtitleFileURL, VideoSubtitleTrack(contentsOf: path) != nil {
+            // 旧 YouTube 条目补查字幕来源；不能仅凭中文文件名认作机器翻译。
+            if candidate.originalSubtitlePath == nil, candidate.initialSubtitlePath == nil,
+               subtitleMetadata[id] == nil, YouTubeVideoID.extract(from: candidate.urlString) != nil,
+               !((try? FileManager.default.contentsOfDirectory(at: path.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? []).contains(where: {
+                   $0.lastPathComponent.hasPrefix(id.uuidString + ".") && $0.deletingPathExtension().lastPathComponent.lowercased().hasSuffix("-en") && ["srt", "vtt"].contains($0.pathExtension.lowercased())
+               }),
+               !subtitleMetadataRequests.contains(id), let url = URL(string: candidate.urlString) {
+                if (candidate.subtitleMetadataFailureCount ?? 0) >= 3 {
+                    subtitleMetadata[id] = DownloadEngine.Metadata(title: candidate.title, author: candidate.author, duration: candidate.duration, chapters: [])
+                } else {
+                    subtitleMetadataRequests.insert(id)
+                    downloader.fetchMetadata(sourceURL: url) { [weak self] result in
+                        DispatchQueue.main.async {
+                            guard let self, let current = self.item(with: id) else { return }
+                            switch result {
+                            case .success(let metadata):
+                                self.subtitleMetadata[id] = metadata
+                                self.update(id) { $0.subtitleMetadataFailureCount = 0 }
+                            case .failure:
+                                let count = min(3, max(0, current.subtitleMetadataFailureCount ?? 0) + 1)
+                                self.update(id) { $0.subtitleMetadataFailureCount = count }
+                                // 前两次不登记来源，requests保留到退出，本次运行不循环查询。
+                                if count >= 3 {
+                                    self.subtitleMetadata[id] = DownloadEngine.Metadata(title: current.title, author: current.author, duration: current.duration, chapters: [])
+                                }
+                            }
+                            self.save()
+                            self.pumpLocalTranscriptions()
+                        }
+                    }
+                    // 元数据在查时跳过本条，其他条目的转写无需等它。
+                    DispatchQueue.main.async { [weak self] in self?.pumpLocalTranscriptions() }
+                    return
+                }
+            }
+            if subtitleMetadataRequests.contains(id), subtitleMetadata[id] == nil { return }
+            if candidate.originalSubtitlePath == nil, candidate.initialSubtitlePath == nil {
+                do {
+                    let registered = try registerDownloadedSubtitles(candidate, selected: path, metadata: subtitleMetadata[id])
+                    update(id) { $0 = registered }
+                } catch {
+                    update(id) { $0.transcriptionState = "failed"; $0.transcriptionError = error.localizedDescription; $0.transcriptionErrorCode = "processing_failed" }
+                    explicitTranscriptionRetryIDs.remove(id)
+                    save()
+                    DispatchQueue.main.async { [weak self] in self?.pumpLocalTranscriptions() }
+                    return
+                }
+            }
+            update(id) { $0.transcriptionState = $0.transcriptionLanguage == nil ? "not_needed" : "ready" }
+            explicitTranscriptionRetryIDs.remove(id)
+            save()
+            DispatchQueue.main.async { [weak self] in self?.pumpLocalTranscriptions() }
+            return
+        }
+        update(id) { $0.transcriptionState = "queued"; $0.transcriptionError = nil }
+        guard flushPendingSaves() else { pumpLocalTranscriptions(); return }
+        localTranscriptionID = id
+        let folder = mediaFolder
+        let original = resumesTranslation ? candidate.originalSubtitlePath.map { URL(fileURLWithPath: $0) } : nil
+        localTranscriptionTask = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            defer {
+                self.localTranscriptionTask = nil
+                self.localTranscriptionID = nil
+                self.explicitTranscriptionRetryIDs.remove(id)
+                self.pumpLocalTranscriptions()
+            }
+            do {
+                // 内嵌字幕存在时不用语音模型；保留媒体自身字幕。
+                let asset = AVURLAsset(url: movie)
+                if self.item(with: id)?.duration == nil,
+                   let duration = try? await asset.load(.duration).seconds,
+                   duration.isFinite, duration > 0 {
+                    self.update(id) { $0.duration = duration }
+                }
+                if !resumesTranslation {
+                    let subtitles = try await asset.loadTracks(withMediaType: .subtitle)
+                    let captions = try await asset.loadTracks(withMediaType: .closedCaption)
+                    if !subtitles.isEmpty || !captions.isEmpty {
+                        self.update(id) { $0.transcriptionState = "not_needed" }
+                        self.save()
+                        return
+                    }
+                }
+                guard #available(macOS 26, *) else {
+                    self.update(id) { $0.transcriptionState = "unsupported"; $0.transcriptionError = nil }
+                    self.save()
+                    return
+                }
+                self.update(id) { $0.transcriptionState = "transcribing" }
+                guard self.flushPendingSaves() else { return }
+                let files = try await LocalTranscription.run(movie: movie, itemID: id, folder: folder,
+                    existingOriginal: original, language: candidate.transcriptionLanguage,
+                    languageFallback: candidate.transcriptionLanguageFallback ?? false) { [self] phase in
+                    try await MainActor.run {
+                        try Task.checkCancellation()
+                        guard self.item(with: id) != nil, self.ensureQueueWritable() else {
+                            throw SubtitleVersionStore.Failure(code: "queue_write_failed", message: "队列无法保存，转写稍后再试")
+                        }
+                        self.update(id) {
+                            switch phase {
+                            case .detected(let language, let fallback):
+                                $0.transcriptionLanguage = language
+                                $0.transcriptionLanguageFallback = fallback
+                            case .originalReady(let path):
+                                $0.originalSubtitlePath = path.path
+                                $0.subtitleFilePath = path.path
+                            case .translating: $0.transcriptionState = "translating"
+                            }
+                        }
+                        guard self.flushPendingSaves() else {
+                            throw SubtitleVersionStore.Failure(code: "queue_write_failed", message: "队列无法保存，改动保留在内存中")
+                        }
+                    }
+                }
+                try Task.checkCancellation()
+                guard self.item(with: id) != nil else { return }
+                self.update(id) {
+                    $0.originalSubtitlePath = files.original.path
+                    $0.initialSubtitlePath = files.initial?.path
+                    $0.subtitleFilePath = files.initial?.path ?? files.original.path
+                    $0.translationSource = files.initial == nil ? nil : "apple"
+                    $0.initialTranslationSource = $0.translationSource
+                    $0.subtitleRevision = ($0.subtitleRevision ?? 0) + 1
+                    $0.transcriptionLanguage = files.language
+                    $0.transcriptionLanguageFallback = files.languageFallback
+                    $0.transcriptionState = "ready"
+                    $0.transcriptionError = nil
+                    $0.transcriptionErrorCode = nil
+                }
+                self.save()
+            } catch {
+                guard !Task.isCancelled, self.item(with: id) != nil else { return }
+                var failureCode = "processing_failed"
+                if #available(macOS 26, *) { failureCode = (error as? LocalTranscription.Failed)?.code ?? failureCode }
+                self.update(id) {
+                    $0.transcriptionState = "failed"; $0.transcriptionError = error.localizedDescription
+                    $0.transcriptionErrorCode = failureCode
+                }
+                self.save()
+            }
+        }
+    }
+
+    /// yt-dlp 原下载轨不动，双语显示轨另存。机器来源来自元数据或 YouTube 明确的翻译语言后缀。
+    private func registerDownloadedSubtitles(_ item: WatchItem, selected: URL, metadata: DownloadEngine.Metadata?) throws -> WatchItem {
+        let folder = selected.deletingLastPathComponent()
+        let prefix = item.id.uuidString + "."
+        let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix(prefix) && ["srt", "vtt"].contains($0.pathExtension.lowercased()) && VideoSubtitleTrack(contentsOf: $0) != nil }
+            .sorted { SubtitleTrackRank.value(for: $0) < SubtitleTrackRank.value(for: $1) }
+        func language(_ url: URL) -> String { String(url.deletingPathExtension().lastPathComponent.dropFirst(prefix.count)) }
+        let english = files.first { language($0).lowercased().hasPrefix("en") }
+        let chinese = files.filter { language($0).lowercased().hasPrefix("zh") }
+        let manual = chinese.first { metadata?.subtitleLanguages.contains(language($0)) == true }
+        let translated = manual ?? chinese.first
+        var updated = item
+        if updated.knownSubtitlePaths == nil {
+            updated.knownSubtitlePaths = try DownloadEngine.localSubtitleFiles(for: item.id, in: folder).map(\.path)
+        }
+        updated.transcriptionState = "not_needed"
+        guard let translated else {
+            updated.originalSubtitlePath = selected.path
+            return updated
+        }
+        if metadata?.language?.lowercased().hasPrefix("zh") == true {
+            updated.originalSubtitlePath = translated.path
+            updated.subtitleFilePath = translated.path
+            return updated
+        }
+        let isYouTube = YouTubeVideoID.extract(from: item.urlString) != nil
+        let automatic = manual == nil && isYouTube && (
+            metadata?.automaticCaptionLanguages.contains(language(translated)) == true ||
+            language(translated).lowercased().hasSuffix("-en")
+        )
+        updated.translationSource = automatic ? "youtube_auto" : "author"
+        updated.initialTranslationSource = updated.translationSource
+        updated.initialSubtitlePath = translated.path
+        let track = VideoSubtitleTrack(contentsOf: translated)!
+        let bilingual = track.cues.contains { SubtitleVersionStore.split($0).translation != nil }
+        updated.originalSubtitlePath = bilingual ? translated.path : english?.path
+        updated.subtitleFilePath = translated.path
+        updated.subtitleRevision = (item.subtitleRevision ?? 0) + 1
+        // 首次显示也按相同句块生成，避免播放器仍读碎片而 MCP 已按句块编号。
+        let display = folder.appendingPathComponent("\(item.id.uuidString).initial-display-\(UUID().uuidString).vtt")
+        try SubtitleVersionStore.write(SubtitleVersionStore.initialCues(updated), to: display)
+        updated.subtitleFilePath = display.path
+        return updated
+    }
+
+    // MARK: - agent 经 MCP 的读写
+
+    /// queue.json 读不出来时 `save()` 什么都不写，agent 的写操作要整个拒绝，不能回答成功。
+    var acceptsAgentWrites: Bool { !isQueueFileUnreadable && isUpgradeBackupReady && !queueWriteFailed }
+    func prepareAgentWrites() -> Bool { ensureQueueWritable() }
+    var upgradeBackupFailed: Bool { !isUpgradeBackupReady }
+    var queueWriteFailed: Bool { isQueueWriteFailed || !persistenceWriter.latestWriteSucceeded }
+    static let backupFailureMessage = "无法备份数据，改动不会保存"
+    var queueWriteWarning: String? {
+        if upgradeBackupFailed { return Self.backupFailureMessage }
+        return isQueueWriteFailed ? "无法保存数据，改动尚未保存" : nil
+    }
+
+    func item(with id: UUID) -> WatchItem? {
         items.first { $0.id == id }
     }
 
+    /// 把这些条目手动挪到 `target`。调用方先确认编号都存在；一次调用只存一次盘。
+    /// 返回挪动前的条目，顺序和 `ids` 相同；已经手动定在 `target` 的不改，不出现在结果里。
+    func moveItems(_ ids: [UUID], to target: WatchStatus) -> [WatchItem] {
+        guard requireQueueWrite() else { return [] }
+        var before: [WatchItem] = []
+        for id in ids {
+            guard let existing = item(with: id) else { continue }
+            if existing.status == target, existing.statusIsManual { continue }
+            before.append(existing)
+            update(id) { $0.applyManualStatus(target) }
+        }
+        if !before.isEmpty { save() }
+        return before
+    }
+
+    /// 整组替换 agent 写的章节；空数组删掉 agent 的章节，目录回到视频自带的。调用方先确认没有用户改过的章节。
+    func replaceAgentChapters(_ chapters: [VideoChapter], for id: UUID) {
+        guard requireQueueWrite() else { return }
+        update(id) { $0.agentChapters = chapters.isEmpty ? nil : chapters }
+        save()
+    }
+
+    func subtitleSnapshot(for id: UUID) throws -> SubtitleVersionStore.Snapshot {
+        guard let item = item(with: id) else { throw SubtitleVersionStore.Failure(code: "not_found", message: "条目不存在") }
+        return try SubtitleVersionStore.snapshot(item)
+    }
+
+    /// 完整译文替换和初译退回都先通过统一写入保护，再等待真实 queue.json 写盘。
+    @discardableResult
+    func writeSubtitleTranslations(_ translations: [SubtitleVersionStore.Translation], revision: String, for id: UUID) throws -> SubtitleVersionStore.Snapshot {
+        try requireSubtitleWrite()
+        guard let existing = item(with: id) else { throw SubtitleVersionStore.Failure(code: "not_found", message: "条目不存在") }
+        let updated = try SubtitleVersionStore.writing(translations, revision: revision, item: existing)
+        update(id) { $0 = updated }
+        guard flushPendingSaves() else { throw SubtitleVersionStore.Failure(code: "queue_write_failed", message: "无法保存队列，改动保留在内存中，下次保存再试") }
+        return try subtitleSnapshot(for: id)
+    }
+
+    @discardableResult
+    func restoreInitialTranslation(for id: UUID) throws -> SubtitleVersionStore.Snapshot {
+        try requireSubtitleWrite()
+        guard let existing = item(with: id) else { throw SubtitleVersionStore.Failure(code: "not_found", message: "条目不存在") }
+        let updated = try SubtitleVersionStore.restoring(existing)
+        update(id) { $0 = updated }
+        guard flushPendingSaves() else { throw SubtitleVersionStore.Failure(code: "queue_write_failed", message: "无法保存队列，改动保留在内存中，下次保存再试") }
+        return try subtitleSnapshot(for: id)
+    }
+
+    private func requireSubtitleWrite() throws {
+        guard prepareAgentWrites() else {
+            let code = upgradeBackupFailed ? "queue_backup_failed" : (queueWriteFailed ? "queue_write_failed" : "queue_unreadable")
+            throw SubtitleVersionStore.Failure(code: code, message: queueWriteWarning ?? "队列无法读取")
+        }
+    }
+
+    /// 打开这一条并让详情视图跳到 `seconds`。不把 seesee 拉到前台。
+    func requestAgentSeek(to seconds: Double, play: Bool, for id: UUID) -> AgentSeekRequest {
+        let request = AgentSeekRequest(itemID: id, seconds: seconds, play: play)
+        agentSeekRequest = request
+        selection = id
+        return request
+    }
+
+    func finishAgentSeekRequest(_ requestID: UUID) {
+        guard agentSeekRequest?.id == requestID else { return }
+        agentSeekRequest = nil
+    }
+
     private func update(_ id: UUID, change: (inout WatchItem) -> Void) {
+        guard ensureQueueWritable() else { return }
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         change(&items[index])
     }
@@ -1412,9 +1915,10 @@ final class QueueStore: ObservableObject {
     }
 
     private func load() {
-        pendingUpgradeBackup = nil
-        upgradeBackupFailed = false
-        guard FileManager.default.fileExists(atPath: dataFile.path) else { return }
+        guard FileManager.default.fileExists(atPath: dataFile.path) else {
+            QueueUpgradeBackup.markCurrent(defaults)
+            return
+        }
         guard let data = try? Data(contentsOf: dataFile),
               let decoded = MediaFolderMoveRecovery.decodeQueue(data) else {
             // 读不出来就当作无法判断：列表先空着，但不拿空列表覆盖原文件。
@@ -1424,48 +1928,129 @@ final class QueueStore: ObservableObject {
             return
         }
         isQueueFileUnreadable = false
-        // 旧版本写的 queue.json：第一次按新格式保存前原样复制一份；旧的 title 当作原标题。
-        if TitleFieldsMigration.backUpIfLegacy(data, beside: dataFile) == .failed {
-            pendingUpgradeBackup = data
-            upgradeBackupFailed = true
-            persistenceWriter.cancelPending()
-        }
         items = decoded.map { item in
             var migrated = item
             migrated.adoptLegacyTitle()
             return migrated
         }
+        loadedTranscriptionItemIDs = Set(items.map(\.id))
+        isUpgradeBackupReady = QueueUpgradeBackup.backUpIfNeeded(dataFile: dataFile, data: data, defaults: defaults)
+        if !isUpgradeBackupReady { persistenceWriter.cancelPending() }
+        if isUpgradeBackupReady {
+            var catalogued = false
+            if !isMediaFolderDisconnected {
+                for index in items.indices where items[index].state == .ready && items[index].knownSubtitlePaths == nil {
+                    if let files = try? DownloadEngine.localSubtitleFiles(for: items[index].id, in: mediaFolder) {
+                        items[index].knownSubtitlePaths = files.map(\.path)
+                        catalogued = true
+                    }
+                }
+            }
+            for index in items.indices where ["transcribing", "translating"].contains(items[index].transcriptionState ?? "") {
+                items[index].transcriptionState = "queued"
+                items[index].transcriptionError = nil
+            }
+            if catalogued { save() }
+        }
     }
 
     private func save() {
-        guard !isQueueFileUnreadable, ensureUpgradeBackup() else { return }
+        guard ensureQueueWritable() else { return }
         persistenceWriter.schedule(items)
     }
 
-    func flushPendingSaves() {
-        guard !isQueueFileUnreadable, ensureUpgradeBackup() else { return }
-        persistenceWriter.flush(items)
+    @discardableResult
+    func flushPendingSaves() -> Bool {
+        guard ensureQueueWritable(retryFailedWrite: false) else { return false }
+        let saved = persistenceWriter.flush(items)
+        refreshPersistenceState()
+        return saved
     }
 
-    /// 升级前备份还没成功时再试一次。成功就解锁，这次运行积累的改动照常保存；失败返回 false。
-    private func ensureUpgradeBackup() -> Bool {
-        guard let data = pendingUpgradeBackup else { return true }
-        guard TitleFieldsMigration.backUpIfLegacy(data, beside: dataFile) != .failed else {
-            upgradeBackupFailed = true
-            return false
+    private func observePersistenceWrites() {
+        transcriptionModelsObserver = NotificationCenter.default.addObserver(forName: TranscriptionModelStatus.assetsAvailableNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.assetTranscriptionRecoveryPending = true
+                _ = self.recoverPendingTranscriptions()
+                self.pumpLocalTranscriptions()
+            }
         }
-        pendingUpgradeBackup = nil
-        upgradeBackupFailed = false
+        persistenceWriter.onWriteCompleted = { [weak self] in
+            DispatchQueue.main.async { self?.refreshPersistenceState() }
+        }
+    }
+
+    deinit {
+        if let transcriptionModelsObserver { NotificationCenter.default.removeObserver(transcriptionModelsObserver) }
+    }
+
+    private func refreshPersistenceState() {
+        // 回报时读取 writer 的最新结果，避免旧的异步失败把已成功重试的提示重新打开。
+        let failed = !persistenceWriter.latestWriteSucceeded
+        if isQueueWriteFailed != failed { isQueueWriteFailed = failed }
+        if failed { dismissIntakeNotice() }
+    }
+
+    /// 重试时只备份磁盘原件，不能把已改动的内存队列当作升级前数据。
+    /// 各写入口和保存共享这一判断；进度及后台更新只读时静默返回。
+    private func ensureQueueWritable(retryFailedWrite: Bool = true) -> Bool {
+        guard !isQueueFileUnreadable else { return false }
+        if !isUpgradeBackupReady {
+            guard let original = try? Data(contentsOf: dataFile),
+                  MediaFolderMoveRecovery.decodeQueue(original) != nil else { return false }
+            isUpgradeBackupReady = QueueUpgradeBackup.backUpIfNeeded(dataFile: dataFile, data: original, defaults: defaults)
+        }
+        guard isUpgradeBackupReady else { return false }
+        if retryFailedWrite {
+            refreshPersistenceState()
+            if isQueueWriteFailed {
+                let saved = persistenceWriter.flush(items)
+                refreshPersistenceState()
+                return saved
+            }
+        }
         return true
     }
 
-    /// 用户的写操作（加链接、改名、标记已看、排序、删除）在改内存之前先过这一关。
-    /// 备份还是写不成就拒绝，并提示改动不会保存。
-    private func acceptsUserWrite() -> Bool {
-        guard ensureUpgradeBackup() else {
-            showIntakeNotice(title: "没有保存", detail: Self.backupFailureMessage, systemImage: "exclamationmark.triangle.fill")
+    private func requireQueueWrite() -> Bool {
+        guard ensureQueueWritable() else {
+            dismissIntakeNotice()
+            lastIntakeError = queueWriteWarning ?? MediaFolderCopy.queueUnreadable
             return false
         }
         return true
+    }
+}
+
+/// 第一次用新格式保存前，把旧的 queue.json 复制一份留在同目录，文件名带日期。
+/// 标题和待播清单状态共用 queueFormatVersion；已有标题备份不代替本次格式升级备份。
+enum QueueUpgradeBackup {
+    static let formatVersionKey = "queueFormatVersion"
+    static let currentFormatVersion = 7
+    static let filePrefix = "queue-升级前备份-"
+
+    /// 只在偏好设置里的格式版本低于当前版本、而且 queue.json 读得出来时备份；备份写成功才记下新版本。
+    @discardableResult
+    static func backUpIfNeeded(dataFile: URL, data: Data, defaults: UserDefaults, now: Date = Date()) -> Bool {
+        guard defaults.integer(forKey: formatVersionKey) < currentFormatVersion else { return true }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        var backup = dataFile.deletingLastPathComponent()
+            .appendingPathComponent("\(filePrefix)\(formatter.string(from: now)).json")
+        if FileManager.default.fileExists(atPath: backup.path) {
+            backup = dataFile.deletingLastPathComponent()
+                .appendingPathComponent("\(filePrefix)\(formatter.string(from: now))-\(UUID().uuidString).json")
+        }
+        // 原子写入：中途失败不会留下半截备份。保留同一秒内其他升级的备份。
+        guard (try? data.write(to: backup, options: .atomic)) != nil else { return false }
+        markCurrent(defaults)
+        return true
+    }
+
+    /// 还没有 queue.json（新装）时没有旧数据要备份，直接记成当前版本。
+    static func markCurrent(_ defaults: UserDefaults) {
+        defaults.set(currentFormatVersion, forKey: formatVersionKey)
     }
 }

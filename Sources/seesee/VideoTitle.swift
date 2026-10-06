@@ -73,7 +73,7 @@ extension WatchItem {
     /// 原标题。旧条目还没迁移时退回 `title`。
     var resolvedOriginalTitle: String { originalTitle ?? title }
 
-    var translationSource: TitleTranslationSource? {
+    var titleTranslationSource: TitleTranslationSource? {
         translatedTitleSource.flatMap(TitleTranslationSource.init(rawValue:))
     }
 
@@ -81,7 +81,7 @@ extension WatchItem {
         TitleDisplay.resolve(
             original: resolvedOriginalTitle,
             translated: translatedTitle,
-            source: translationSource,
+            source: titleTranslationSource,
             custom: customTitle,
             author: author
         )
@@ -287,46 +287,6 @@ extension WatchItem {
             setOriginalTitle(XPostTitle.title(postText: full, author: author))
         } else {
             setOriginalTitle(title)
-        }
-    }
-}
-
-/// 标题分开存以后第一次保存前，把旧版本写的 queue.json 原样复制一份留在同目录。
-enum TitleFieldsMigration {
-    /// 不用片库搬移的 `queue.json.bak-` 前缀：搬移按那个前缀找自己的备份，混进来会被当成搬移备份。
-    static let backupPrefix = "queue-标题升级前备份-"
-
-    enum Outcome: Equatable {
-        /// 已经是新格式，不用备份。
-        case notNeeded
-        case backedUp(URL)
-        /// 要备份但没写成：调用方在备份成功之前不能用新格式覆盖 queue.json。
-        case failed
-    }
-
-    /// 有条目还没有 `originalTitle`（旧版本写的）时才复制；同名文件已存在就换个名字，不覆盖。
-    @discardableResult
-    static func backUpIfLegacy(_ data: Data, beside dataFile: URL, now: Date = Date()) -> Outcome {
-        guard let objects = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-              objects.contains(where: { $0["originalTitle"] == nil }) else { return .notNeeded }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone.current
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let folder = dataFile.deletingLastPathComponent()
-        let base = backupPrefix + formatter.string(from: now)
-        var name = base + ".json"
-        var suffix = 1
-        while FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path) {
-            name = "\(base)-\(suffix).json"
-            suffix += 1
-        }
-        let backup = folder.appendingPathComponent(name)
-        do {
-            try data.write(to: backup, options: .withoutOverwriting)
-            return .backedUp(backup)
-        } catch {
-            return .failed
         }
     }
 }

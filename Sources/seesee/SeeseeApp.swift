@@ -28,6 +28,7 @@ private struct MainWindowOpenBridge: View {
 struct SeeseeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = QueueStore()
+    @AppStorage(LibraryViewMode.defaultsKey) private var viewMode: LibraryViewMode = .list
 
     var body: some Scene {
         // 保留 WindowGroup：关最后一窗后进程仍存活（基线行为）。
@@ -39,9 +40,11 @@ struct SeeseeApp: App {
                 .environmentObject(appDelegate.inbox)
                 .tint(OpenMyChrome.ink)
                 .background(MainWindowOpenBridge())
+                .onAppear { appDelegate.attachQueueStore(store) }
                 // 本机翻译标题要弹语言下载提示、或系统只能从视图拿翻译会话时，挂在主窗口上。
                 .modifier(TitleTranslationHost())
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    store.stopLocalTranscriptionQueue()
                     store.flushPendingSaves()
                 }
         }
@@ -52,10 +55,20 @@ struct SeeseeApp: App {
         .commands {
             CommandGroup(replacing: .newItem) { }
             CommandGroup(after: .sidebar) {
+                // 「显示」菜单：⌘1 列表视图、⌘2 看板视图，当前用的那种打勾。
+                ForEach(LibraryViewMode.allCases) { mode in
+                    Toggle(mode.title, isOn: Binding(
+                        get: { viewMode == mode },
+                        set: { if $0 { viewMode = mode } }
+                    ))
+                    .keyboardShortcut(KeyEquivalent(mode.shortcutKey), modifiers: .command)
+                }
+                Divider()
                 Button("显示或隐藏左侧栏") {
                     NotificationCenter.default.post(name: .seeseeSidebarToggle, object: nil)
                 }
                 .keyboardShortcut("s", modifiers: [.command, .control])
+                .disabled(viewMode == .board)
             }
             CommandGroup(after: .appInfo) {
                 Button("打开下载文件夹") { store.revealMediaFolder() }

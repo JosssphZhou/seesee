@@ -56,7 +56,7 @@ struct TitleBackupFailureCheck {
 
     private static func backups(in root: URL) throws -> [String] {
         try FileManager.default.contentsOfDirectory(atPath: root.path)
-            .filter { $0.hasPrefix(TitleFieldsMigration.backupPrefix) }
+            .filter { $0.hasPrefix(QueueUpgradeBackup.filePrefix) }
     }
 
     private static func recoversAfterDirectoryBecomesWritable(root: URL) throws {
@@ -78,7 +78,7 @@ struct TitleBackupFailureCheck {
         let backupData = try Data(contentsOf: root.appendingPathComponent(found[0]))
         try check(backupData == before, "补上的备份不是旧文件的原样复制")
         let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [[String: Any]]
-        try check(saved?.first?["title"] as? String == "更新后的标题", "补上备份以后，改名应照常保存：\(saved?.first?["title"] ?? "没有")")
+        try check(saved?.first?["customTitle"] as? String == "更新后的标题", "补上备份以后，改名应照常保存：\(saved?.first?["customTitle"] ?? "没有")")
         try check(saved?.first?["playbackPosition"] as? Double == 321.25, "续播进度应还在")
     }
 
@@ -95,8 +95,8 @@ struct TitleBackupFailureCheck {
         let title = store.items.first { $0.id == id }?.title ?? "条目不见了"
         try check(title == "旧标题", "备份写不成时改名应在改内存之前被拒绝，现在内存里是「\(title)」")
         try check(
-            store.intakeNotice?.detail == "无法备份数据，改动不会保存",
-            "改名被拒时应提示「无法备份数据，改动不会保存」，实际 \(store.intakeNotice.map { "\($0.title) \($0.detail)" } ?? "没有提示")"
+            store.queueWriteWarning == "无法备份数据，改动不会保存",
+            "改名被拒时应提示「无法备份数据，改动不会保存」，实际 \(store.queueWriteWarning ?? "没有提示")"
         )
         store.updatePlaybackPosition(400, for: id)
         store.flushPendingSaves()

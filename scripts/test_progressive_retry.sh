@@ -142,6 +142,11 @@ swiftc -module-cache-path "$scratch_dir/module-cache" \
     "$source_dir/MediaLibraryMover.swift" \
     "$source_dir/PlayerReadyDecision.swift" \
     "$source_dir/QueueStore.swift" \
+    "$source_dir/LocalTranscription.swift" \
+    "$source_dir/AppleSpeechModelBackend.swift" \
+    "$source_dir/TranscriptionModelStatus.swift" \
+    "$source_dir/SubtitleVersionStore.swift" \
+    "$source_dir/SubtitleSentenceBlocks.swift" \
     "$source_dir/SponsorSkip.swift" \
     "$source_dir/VideoTitle.swift" \
     "$source_dir/TitleTranslation.swift" \
