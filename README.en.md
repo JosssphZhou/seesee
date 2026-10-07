@@ -193,8 +193,10 @@ The build ends up in `dist/seesee.app`. Without `SEESEE_INSTALL_APP=0`, the scri
 
 ## License and credits
 
-[MIT License](LICENSE). The bundled yt-dlp, ffmpeg and Deno keep their own upstream licenses; the notices are in the app bundle's `Contents/Resources` folder.
+seesee is licensed under [AGPL-3.0](LICENSE) (AGPL-3.0-only). Versions 1.1.1 and earlier were released under the MIT License and keep that license. The bundled yt-dlp, ffmpeg and Deno keep their own upstream licenses; the notices are in the app bundle's `Contents/Resources` folder.
 
 seesee is built on [Replay](https://github.com/grinich/replay), an open-source project by Michael Grinich. Thanks to him for the offline queue and native player that seesee started from; seesee redesigned the interface and added bilingual subtitles, the board, on-device transcription and MCP. Thanks also to the maintainers of yt-dlp, ffmpeg and Deno.
+
+The original project is released under the MIT License; its original notice is kept in [LICENSES/MIT-upstream.txt](LICENSES/MIT-upstream.txt), and [NOTICE](NOTICE) explains how the two licenses fit together.
 
 The films in the README screenshots are Blender Foundation open movies, used under their Creative Commons Attribution (CC BY) licenses, © Blender Foundation.

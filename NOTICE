@@ -1,0 +1,17 @@
+seesee
+Copyright (C) 2026 Joseph Zhou and Yiqi Xie
+
+seesee is based on Replay by Michael Grinich (https://github.com/grinich/replay),
+which is released under the MIT License. The original MIT copyright and
+permission notice is kept in LICENSES/MIT-upstream.txt.
+
+seesee is licensed under the GNU Affero General Public License, version 3 only
+(AGPL-3.0-only). See LICENSE. This applies to the source code from this change
+on and to every release after 1.1.1, and covers our changes and additions. The
+parts that come from the original project remain available under the MIT License.
+
+seesee 1.1.1 and earlier were released under the MIT License. Those releases
+keep that license.
+
+The bundled yt-dlp, ffmpeg and Deno keep their own upstream licenses. Their
+notices are in the app bundle's Contents/Resources folder.

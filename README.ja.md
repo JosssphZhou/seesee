@@ -193,8 +193,8 @@ SEESEE_INSTALL_APP=0 ./scripts/build_app.sh
 
 ## ライセンスと謝辞
 
-[MIT License](LICENSE)。同梱の yt-dlp、ffmpeg、Deno はそれぞれのライセンスに従い、ライセンス文はアプリバンドルの `Contents/Resources` フォルダーにあります。
+seesee は [AGPL-3.0](LICENSE)（AGPL-3.0-only）で公開しています。1.1.1 以前のバージョンは MIT ライセンスで公開しており、そのライセンスは変わりません。同梱の yt-dlp、ffmpeg、Deno はそれぞれのライセンスに従い、ライセンス文はアプリバンドルの `Contents/Resources` フォルダーにあります。
 
-seesee は Michael Grinich のオープンソースプロジェクト [Replay](https://github.com/grinich/replay) をもとに開発しました。原作者に感謝します。オフラインのキューとネイティブプレイヤーを土台に、seesee は画面を作り直し、2 言語字幕、ボード、ローカル文字起こし、MCP を加えました。yt-dlp、ffmpeg、Deno のメンテナーにも感謝します。
+seesee は Michael Grinich のオープンソースプロジェクト [Replay](https://github.com/grinich/replay) をもとに開発しました。原作者に感謝します。元のプロジェクトは MIT ライセンスで公開されており、元のライセンス文は [LICENSES/MIT-upstream.txt](LICENSES/MIT-upstream.txt) に、説明は [NOTICE](NOTICE) にあります。オフラインのキューとネイティブプレイヤーを土台に、seesee は画面を作り直し、2 言語字幕、ボード、ローカル文字起こし、MCP を加えました。yt-dlp、ffmpeg、Deno のメンテナーにも感謝します。
 
 README の静止画に映っている映画は Blender Foundation のオープンムービーで、それぞれのクリエイティブ・コモンズ表示ライセンス（CC BY）のもとで使用しています。© Blender Foundation。
