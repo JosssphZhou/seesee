@@ -141,6 +141,13 @@ seesee has no account, no analytics and no cloud sync. It does not read browser 
 
 Videos are stored in `~/Movies/seesee` by default, which you can change in Settings (「设置」). The queue is stored in `~/Library/Application Support/seesee/queue.json`. Only download content you have the right to watch and keep.
 
+## Roadmap
+
+These two features were in 1.0. They are out of the app for now and will come back after a redesign.
+
+- Highlights: mark the subtitle lines you want to keep, then show only the highlighted lines.
+- Notes: write a line of your own under a highlighted line, and see it again when you come back.
+
 ## Requirements
 
 | Feature | Requirement |
