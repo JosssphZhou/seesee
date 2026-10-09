@@ -200,3 +200,7 @@ seesee is built on [Replay](https://github.com/grinich/replay), an open-source p
 The original project is released under the MIT License; its original notice is kept in [LICENSES/MIT-upstream.txt](LICENSES/MIT-upstream.txt), and [NOTICE](NOTICE) explains how the two licenses fit together.
 
 The films in the README screenshots are Blender Foundation open movies, used under their Creative Commons Attribution (CC BY) licenses, © Blender Foundation.
+
+## Community
+
+[LINUX DO](https://linux.do/)

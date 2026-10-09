@@ -196,3 +196,7 @@ seesee 以 [AGPL-3.0](LICENSE)（AGPL-3.0-only）许可发布。1.1.1 及以前�
 seesee 基于 Michael Grinich 的开源项目 [Replay](https://github.com/grinich/replay) 开发，感谢原作者。原项目以 MIT 许可发布，它的原始许可声明保留在 [LICENSES/MIT-upstream.txt](LICENSES/MIT-upstream.txt)，说明见 [NOTICE](NOTICE)。在它的离线队列和原生播放器基础上，seesee 重做了界面，加入了双语字幕、看板、本机转写和 MCP。也感谢 yt-dlp、ffmpeg 和 Deno 的维护者。
 
 README 静态截图里的影片是 Blender 基金会的开放电影，按各自的 Creative Commons 署名许可（CC BY）使用，© Blender Foundation。
+
+## 交流社区
+
+[LINUX DO](https://linux.do/)
