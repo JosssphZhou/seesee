@@ -5,7 +5,7 @@
 <h1 align="center">seesee</h1>
 
 <p align="center">
-  <a href="README.md">中文</a> · <a href="README.en.md">English</a> · 日本語
+  <a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a> · 日本語
 </p>
 
 <p align="center">
